@@ -53,23 +53,16 @@ class MPNNLayer(MessagePassing):
                                )
         self.U = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
                                nn.LeakyReLU())
-        self.h_msg = None
+        self.h_msg_temp = None
 
     def forward(self, h_node, edge_index, h_msg, encoded_msg):
-        # print("x_feat: ", x.shape)
-        # print("hiddent feat before: ", hidden)
         h_node = self.propagate(edge_index, h_node=h_node, h_msg=h_msg, encoded_msg=encoded_msg)
-        # print("hidden feat after: ", hidden)
-        return h_node
+        return h_node, self.h_msg_temp
 
     def message(self, h_node_i, h_node_j, encoded_msg):
-        # [1,3][1,3][1,32]
-        # print("x_i: ",x_i.shape)
-        # print("x_j: ",x_j.shape)
-        # print("z: ",z.shape)
-        h_msg = self.M(torch.cat([h_node_i, h_node_j, encoded_msg], dim=-1))
-        self.h_msg = h_msg
-        return h_msg
+        aggr_msg = self.M(torch.cat([h_node_i, h_node_j, encoded_msg], dim=-1))
+        self.h_msg_temp = aggr_msg
+        return aggr_msg
 
     def update(self, aggr_out, h_node):
         h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
@@ -93,40 +86,42 @@ class AlgoReasoning(Module):
         self.processor = MPNNLayer()
         self.decoder = DecoderLayer()
 
-    def forward(self, data, step_idx, h_msg, h_node):
- 
+    def forward(self, data, step_idx, h_msg):
+        h_node = self.lin_in(data.x)
         msg = data.edge_attr[step_idx]
         # encoded_message -> z
         encoded_msg = self.encoder(msg,h_msg)
         # hidden_node -> h
-        h_node = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
         # decoded_message -> y
-        y_msg = self.decoder(self.processor.h_msg)
-
-        return self.processor.h_msg, y_msg
+        y_msg = self.decoder(h_msg.detach())
+        return h_msg, y_msg
 
 
 def train(model, train_loader, optimizer, device):
+    torch.autograd.set_detect_anomaly(True)
     model.train()
     loss_all = 0
     for data in train_loader:
         # Transpose batch
         data = prepare_batch(data)
         data = data.to(device)
+        data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         optimizer.zero_grad()
         h_dim=32
-        x_dim=2
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
-        lin_in = nn.Linear(x_dim, h_dim)
-        h_node = lin_in(data.x.float())
-        for step_idx in range(data.edge_attr.size(dim=0)):
-            h_msg, y_msg = model(data, step_idx, h_msg=h_msg, h_node=h_node)
-    
-            loss = F.mse_loss(h_msg, data.y)
-            loss.backward()
+        #use step_idx=0 to predict step_idx=1
+        for step_idx in range(data.edge_attr.size(dim=0)-1):
+            print(step_idx)
+            h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
+            loss = F.mse_loss(y_msg, data.edge_attr[step_idx+1])
+            loss.backward(retain_graph=True)
+            print("loss item",loss.item())
             loss_all += loss.item() * data.num_graphs
             optimizer.step()
-            print(loss_all / len(train_loader.dataset))
+            print("len(train_loader.dataset)", len(train_loader.dataset))
+    print(loss_all / len(train_loader.dataset))
+
 
 
 def eval(model, loader, device):
