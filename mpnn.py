@@ -31,119 +31,102 @@ from factor import *
 from factor_graph import *
 from dataset import *
 
+class EncoderLayer(MessagePassing):
+    def __init__(self, h_dim=32, msg_dim=2, aggr='add',bias=True):
+        # Set the aggregation function
+        super().__init__(aggr=aggr)
+        self.lin = nn.Linear(msg_dim+h_dim, h_dim, bias)
+    
+    def forward(self, msg, h_msg):
+        input = torch.cat((msg, h_msg), dim=1).float()
+        return self.lin(input)
 
 class MPNNLayer(MessagePassing):
-    def __init__(self, hidden_dim=32, aggr='add',bias=True):
+    def __init__(self, h_dim=32, aggr='add',bias=True):
         # Set the aggregation function
         super().__init__(aggr=aggr)
 
-        self.M = nn.Sequential(nn.Linear(2*hidden_dim+hidden_dim, hidden_dim, bias=bias),
+        self.M = nn.Sequential(nn.Linear(2*h_dim+h_dim, h_dim, bias=bias),
                                nn.LeakyReLU(),
-                               nn.Linear(hidden_dim, hidden_dim, bias=bias),
+                               nn.Linear(h_dim, h_dim, bias=bias),
                                nn.LeakyReLU()
                                )
-        self.U = nn.Sequential(nn.Linear(2*hidden_dim, hidden_dim, bias=bias),
+        self.U = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
                                nn.LeakyReLU())
-        self.latent_msg = None
+        self.h_msg = None
 
-    def forward(self, x, edge_index, hidden, z):
+    def forward(self, h_node, edge_index, h_msg, encoded_msg):
         # print("x_feat: ", x.shape)
         # print("hiddent feat before: ", hidden)
-        hidden = self.propagate(edge_index, x=x, hidden=hidden, z=z)
+        h_node = self.propagate(edge_index, h_node=h_node, h_msg=h_msg, encoded_msg=encoded_msg)
         # print("hidden feat after: ", hidden)
-        print(self.latent_msg)
-        return hidden
+        return h_node
 
-    def message(self, x_i, x_j, z):
+    def message(self, h_node_i, h_node_j, encoded_msg):
         # [1,3][1,3][1,32]
-        print("x_i: ",x_i.shape)
-        print("x_j: ",x_j.shape)
-        print("z: ",z.shape)
-        msg = self.M(torch.cat([x_i, x_j, z], dim=-1))
-        self.latent_msg = msg
-        return msg
+        # print("x_i: ",x_i.shape)
+        # print("x_j: ",x_j.shape)
+        # print("z: ",z.shape)
+        h_msg = self.M(torch.cat([h_node_i, h_node_j, encoded_msg], dim=-1))
+        self.h_msg = h_msg
+        return h_msg
 
-    def update(self, aggr_out, x):
-        hidden = self.U(torch.cat((x, aggr_out), dim=1))
-        return hidden
+    def update(self, aggr_out, h_node):
+        h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
+        return h_node
 
-    def __repr__(self) -> str:
-        return (f'{self.__class__.__name__}(emb_dim={self.emb_dim}, aggr={self.aggr})')
+class DecoderLayer(MessagePassing):
+    def __init__(self, hidden_dim=32,msg_dim=2, aggr='add',bias=True):
+        # Set the aggregation function
+        super().__init__(aggr=aggr)
+        self.lin = nn.Linear(hidden_dim, msg_dim, bias)
+    
+    def forward(self, h_msg):
+        return self.lin(h_msg.float())
 
-
-class MPNNModel(Module):
-    def __init__(self, num_layers=4, emb_dim=64, in_dim=11, edge_dim=4, out_dim=1):
-        """Message Passing Neural Network model for graph property prediction
-
-        Args:
-            num_layers: (int) - number of message passing layers `L`
-            emb_dim: (int) - hidden dimension `d`
-            in_dim: (int) - initial node feature dimension `d_n`
-            edge_dim: (int) - edge feature dimension `d_e`
-            out_dim: (int) - output dimension (fixed to 1)
-        """
+class AlgoReasoning(Module):
+    def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
         super().__init__()
+        self.lin_in = Linear(x_dim, h_dim)
+        self.h_dim=h_dim
+        self.encoder = EncoderLayer()
+        self.processor = MPNNLayer()
+        self.decoder = DecoderLayer()
 
-        # Linear projection for initial node features
-        # dim: d_n -> d
-        self.lin_in = Linear(in_dim, emb_dim)
+    def forward(self, data, step_idx, h_msg, h_node):
+ 
+        msg = data.edge_attr[step_idx]
+        # encoded_message -> z
+        encoded_msg = self.encoder(msg,h_msg)
+        # hidden_node -> h
+        h_node = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        # decoded_message -> y
+        y_msg = self.decoder(self.processor.h_msg)
 
-        # Stack of MPNN layers
-        self.convs = torch.nn.ModuleList()
-        for layer in range(num_layers):
-            self.convs.append(MPNNLayer(emb_dim, edge_dim, aggr='add'))
-
-        # Global pooling/readout function `R` (mean pooling)
-        # PyG handles the underlying logic via `global_mean_pool()`
-        self.pool = global_mean_pool
-
-        # Linear prediction head
-        # dim: d -> out_dim
-        self.lin_pred = Linear(emb_dim, out_dim)
-
-    def forward(self, data):
-        """
-        Args:
-            data: (PyG.Data) - batch of PyG graphs
-
-        Returns: 
-            out: (batch_size, out_dim) - prediction for each graph
-        """
-        h = self.lin_in(data.x)  # (n, d_n) -> (n, d)
-
-        for conv in self.convs:
-            # (n, d) -> (n, d)
-            h = h + conv(h, data.edge_index, data.edge_attr)
-            # Note that we add a residual connection after each MPNN layer
-
-        h_graph = self.pool(h, data.batch)  # (n, d) -> (batch_size, d)
-
-        out = self.lin_pred(h_graph)  # (batch_size, d) -> (batch_size, 1)
-
-        return out.view(-1)
-
-# @title [RUN] Helper functions for managing experiments, training, and evaluating models.
+        return self.processor.h_msg, y_msg
 
 
 def train(model, train_loader, optimizer, device):
     model.train()
     loss_all = 0
-
     for data in train_loader:
         # Transpose batch
         data = prepare_batch(data)
         data = data.to(device)
         optimizer.zero_grad()
-
-
-
-
-        y_pred = model(data)
-        loss = F.mse_loss(y_pred, data.y)
-        loss.backward()
-        loss_all += loss.item() * data.num_graphs
-        optimizer.step()
-    return loss_all / len(train_loader.dataset)
+        h_dim=32
+        x_dim=2
+        h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
+        lin_in = nn.Linear(x_dim, h_dim)
+        h_node = lin_in(data.x.float())
+        for step_idx in range(data.edge_attr.size(dim=0)):
+            h_msg, y_msg = model(data, step_idx, h_msg=h_msg, h_node=h_node)
+    
+            loss = F.mse_loss(h_msg, data.y)
+            loss.backward()
+            loss_all += loss.item() * data.num_graphs
+            optimizer.step()
+            print(loss_all / len(train_loader.dataset))
 
 
 def eval(model, loader, device):
@@ -193,20 +176,20 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
         loss = train(model, train_loader, optimizer, device)
 
         # Evaluate model on validation set
-        val_error = eval(model, val_loader, device)
+        # val_error = eval(model, val_loader, device)
 
-        if best_val_error is None or val_error <= best_val_error:
-            # Evaluate model on test set if validation metric improves
-            test_error = eval(model, test_loader, device)
-            best_val_error = val_error
+        # if best_val_error is None or val_error <= best_val_error:
+        #     # Evaluate model on test set if validation metric improves
+        #     test_error = eval(model, test_loader, device)
+        #     best_val_error = val_error
 
-        if epoch % 10 == 0:
-            # Print and track stats every 10 epochs
-            print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {loss:.7f}, '
-                  f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
+        # if epoch % 10 == 0:
+        #     # Print and track stats every 10 epochs
+        #     print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {loss:.7f}, '
+        #           f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
 
-        scheduler.step(val_error)
-        perf_per_epoch.append((test_error, val_error, epoch, model_name))
+        # scheduler.step(val_error)
+        # perf_per_epoch.append((test_error, val_error, epoch, model_name))
 
     t = time.time() - t
     train_time = t/60
@@ -258,44 +241,59 @@ if __name__ == "__main__":
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
-    # Transpose Batch
-    batch = next(iter(train_loader))
+    model = AlgoReasoning()
+    model_name = type(model).__name__
+    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=100
+)
 
-    print("Before batch: ",batch)
-    batch = prepare_batch(batch)
-    print("After batch: ",batch)
-    print(batch.x[0].shape)
-    print(batch.y[0].shape)
+    # # Transpose Batch
+    # batch = next(iter(train_loader))
 
-    hidden_dim = 32
-    hidden = torch.zeros(batch.edge_attr[0].size(dim=0), hidden_dim)
-    # for i in range(1):
-    i=0
-    msg = batch.edge_attr[i]
-    # print(msg.shape)
-    # print(hidden.shape)
-    input = torch.cat((msg, hidden), dim=1).float()
-    print(input.shape)
-    m = nn.Linear(2+hidden_dim, hidden_dim, bias=True)
-    z = m(input)
-    print(z.shape)
-    mpnn = MPNNLayer()
-    # project node features
-    t = nn.Linear(2, hidden_dim, bias=True)
-    print(batch.x.shape)
-    latent_x = t(batch.x.float())
-    print(latent_x.shape)
-    hidden = mpnn(latent_x, batch.edge_index, hidden=hidden, z=z)
-    print("latent_node shape: ", hidden.shape)
-    print("latent_msg shape: ",mpnn.latent_msg.shape)
+    # print("Before batch: ",batch)
+    # batch = prepare_batch(batch)
+    # print("After batch: ",batch)
+    # print(batch.x[0].shape)
+    # print(batch.y[0].shape)
+
+    # hidden_dim = 32
+    # hidden = torch.zeros(batch.edge_attr[0].size(dim=0), hidden_dim)
+    # # for i in range(1):
+    # i=0
+    # msg = batch.edge_attr[i]
+    # print("Iterations:",batch.edge_attr.size(dim=0))
+    # # print(msg.shape)
+    # # print(hidden.shape)
+    # input = torch.cat((msg, hidden), dim=1).float()
+    # print(input.shape)
+    # m = nn.Linear(2+hidden_dim, hidden_dim, bias=True)
+    # z = m(input)
+    # print(z.shape)
+    # mpnn = MPNNLayer()
+    # # project node features
+    # t = nn.Linear(2, hidden_dim, bias=True)
+    # print(batch.x.shape)
+    # latent_x = t(batch.x.float())
+    # print(latent_x.shape)
+    # hidden = mpnn(latent_x, batch.edge_index, hidden=hidden, z=z)
+    # print("latent_node shape: ", hidden.shape)
+    # print("latent_msg shape: ",mpnn.latent_msg.shape)
 
 
-    # Y = ….
-    # Ye = ge…(ze, hei, hej)
-    #decodeer
-    decoder_edge = nn.Linear(hidden_dim, 2, bias=True)
-    output_msg = decoder_edge(mpnn.latent_msg)
-    print(output_msg.shape)
+    # # Y = ….
+    # # Ye = ge…(ze, hei, hej)
+    # #decodeer
+    # decoder_edge = nn.Linear(hidden_dim, 2, bias=True)
+    # output_msg = decoder_edge(mpnn.latent_msg)
+    # print(output_msg.shape)
+
+
+
 
 
 
