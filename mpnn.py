@@ -75,7 +75,7 @@ class DecoderLayer(MessagePassing):
         self.lin = nn.Linear(hidden_dim, msg_dim, bias)
     
     def forward(self, h_msg):
-        return self.lin(h_msg.float())
+        return self.lin(h_msg)
 
 class AlgoReasoning(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
@@ -92,9 +92,10 @@ class AlgoReasoning(Module):
         # encoded_message -> z
         encoded_msg = self.encoder(msg,h_msg)
         # hidden_node -> h
-        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        # TODO: why detach here
+        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg.detach())
         # decoded_message -> y
-        y_msg = self.decoder(h_msg.detach())
+        y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
 
@@ -109,18 +110,26 @@ def train(model, train_loader, optimizer, device):
         data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         optimizer.zero_grad()
         h_dim=32
+        edge_dim=2
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
+        y_msg = torch.zeros(data.edge_attr[0].size(dim=0), edge_dim)
+        y_msg_pred = [y_msg]
         #use step_idx=0 to predict step_idx=1
         for step_idx in range(data.edge_attr.size(dim=0)-1):
-            print(step_idx)
+            # print(step_idx)
             h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
-            loss = F.mse_loss(y_msg, data.edge_attr[step_idx+1])
-            loss.backward(retain_graph=True)
-            print("loss item",loss.item())
-            loss_all += loss.item() * data.num_graphs
-            optimizer.step()
-            print("len(train_loader.dataset)", len(train_loader.dataset))
-    print(loss_all / len(train_loader.dataset))
+            y_msg_pred.append(y_msg)
+
+        y_msg_pred = torch.stack(y_msg_pred)
+        # print(y_msg_pred.shape)
+        # print(data.edge_attr.shape)
+        loss = F.mse_loss(y_msg_pred, data.edge_attr)
+        loss.backward(retain_graph=True)
+        # print("loss item",loss.item())
+        loss_all += loss.item() * data.num_graphs
+        optimizer.step()
+        # print("len(train_loader.dataset)", len(train_loader.dataset))
+    return loss_all / len(train_loader.dataset)
 
 
 
@@ -129,11 +138,22 @@ def eval(model, loader, device):
     error = 0
 
     for data in loader:
+        data = prepare_batch(data)
         data = data.to(device)
+        data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
+        h_dim=32
+        edge_dim=2
+        h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
+        y_msg = torch.zeros(data.edge_attr[0].size(dim=0), edge_dim)
+        y_msg_pred = [y_msg]
         with torch.no_grad():
-            y_pred = model(data)
+            for step_idx in range(data.edge_attr.size(dim=0)-1):
+                # print(step_idx)
+                h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
+                y_msg_pred.append(y_msg)
             # Mean Absolute Error using std (computed when preparing data)
-            error += (y_pred * std - data.y * std).abs().sum().item()
+            y_msg_pred = torch.stack(y_msg_pred)
+            error += (y_msg_pred - data.edge_attr).abs().sum().item()
     return error / len(loader.dataset)
 
 
@@ -171,20 +191,20 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
         loss = train(model, train_loader, optimizer, device)
 
         # Evaluate model on validation set
-        # val_error = eval(model, val_loader, device)
+        val_error = eval(model, val_loader, device)
 
-        # if best_val_error is None or val_error <= best_val_error:
-        #     # Evaluate model on test set if validation metric improves
-        #     test_error = eval(model, test_loader, device)
-        #     best_val_error = val_error
+        if best_val_error is None or val_error <= best_val_error:
+            # Evaluate model on test set if validation metric improves
+            test_error = eval(model, test_loader, device)
+            best_val_error = val_error
 
-        # if epoch % 10 == 0:
-        #     # Print and track stats every 10 epochs
-        #     print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {loss:.7f}, '
-        #           f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
+        if epoch % 10 == 0:
+            # Print and track stats every 10 epochs
+            print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {loss:.7f}, '
+                  f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
 
-        # scheduler.step(val_error)
-        # perf_per_epoch.append((test_error, val_error, epoch, model_name))
+        scheduler.step(val_error)
+        perf_per_epoch.append((test_error, val_error, epoch, model_name))
 
     t = time.time() - t
     train_time = t/60
@@ -194,15 +214,15 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     return best_val_error, test_error, train_time, perf_per_epoch
 
 def prepare_batch(batch):
-    print("before batch edge_attr shape: ", batch.edge_attr.shape)
-    print("before batch y shape: ", batch.y.shape)
+    # print("before batch edge_attr shape: ", batch.edge_attr.shape)
+    # print("before batch y shape: ", batch.y.shape)
     # batch = batch.to(_DEVICE)
     # if len(batch.x.shape) == 2:
     #     batch.x = batch.x.unsqueeze(-1)
     batch.edge_attr = batch.edge_attr.transpose(1, 0)
     batch.y = batch.y.transpose(1, 0)
-    print("after batch edge_attr shape: ", batch.edge_attr.shape)
-    print("after batch y shape: ", batch.y.shape)
+    # print("after batch edge_attr shape: ", batch.edge_attr.shape)
+    # print("after batch y shape: ", batch.y.shape)
     return batch
 
 if __name__ == "__main__":
@@ -246,100 +266,3 @@ if __name__ == "__main__":
         test_loader,
         n_epochs=100
 )
-
-    # # Transpose Batch
-    # batch = next(iter(train_loader))
-
-    # print("Before batch: ",batch)
-    # batch = prepare_batch(batch)
-    # print("After batch: ",batch)
-    # print(batch.x[0].shape)
-    # print(batch.y[0].shape)
-
-    # hidden_dim = 32
-    # hidden = torch.zeros(batch.edge_attr[0].size(dim=0), hidden_dim)
-    # # for i in range(1):
-    # i=0
-    # msg = batch.edge_attr[i]
-    # print("Iterations:",batch.edge_attr.size(dim=0))
-    # # print(msg.shape)
-    # # print(hidden.shape)
-    # input = torch.cat((msg, hidden), dim=1).float()
-    # print(input.shape)
-    # m = nn.Linear(2+hidden_dim, hidden_dim, bias=True)
-    # z = m(input)
-    # print(z.shape)
-    # mpnn = MPNNLayer()
-    # # project node features
-    # t = nn.Linear(2, hidden_dim, bias=True)
-    # print(batch.x.shape)
-    # latent_x = t(batch.x.float())
-    # print(latent_x.shape)
-    # hidden = mpnn(latent_x, batch.edge_index, hidden=hidden, z=z)
-    # print("latent_node shape: ", hidden.shape)
-    # print("latent_msg shape: ",mpnn.latent_msg.shape)
-
-
-    # # Y = ….
-    # # Ye = ge…(ze, hei, hej)
-    # #decodeer
-    # decoder_edge = nn.Linear(hidden_dim, 2, bias=True)
-    # output_msg = decoder_edge(mpnn.latent_msg)
-    # print(output_msg.shape)
-
-
-
-
-
-
-
-
-
-    # for data in train_loader:
-    #     print("Before batch: ",data)
-    #     data = prepare_batch(data)
-    #     print("After batch: ",data)
-    #     print(data.x[0].shape)
-    #     print(data.y[0].shape)
-
-    # model = MPNNModel(num_layers=4, emb_dim=64, in_dim=11, edge_dim=4, out_dim=1)
-    # model_name = type(model).__name__
-
-    # best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-    #     model, 
-    #     model_name, 
-    #     train_loader,
-    #     val_loader, 
-    #     test_loader,
-    #     n_epochs=100
-    # )
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    # model = MPNNModel(num_layers=4, emb_dim=64,
-    #                   in_dim=11, edge_dim=4, out_dim=1)
-    # model_name = type(model).__name__
-    # best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-    #     model,
-    #     model_name,
-    #     train_loader,
-    #     val_loader,
-    #     test_loader,
-    #     n_epochs=100
-    # )
-
-    # RESULTS = {}
-    # DF_RESULTS = pd.DataFrame(
-    #     columns=["Test MAE", "Val MAE", "Epoch", "Model"])
-    # RESULTS[model_name] = (best_val_error, test_error, train_time)
-    # df_temp = pd.DataFrame(perf_per_epoch, columns=[
-    #                        "Test MAE", "Val MAE", "Epoch", "Model"])
-    # DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
