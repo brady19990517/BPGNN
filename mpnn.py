@@ -69,6 +69,7 @@ class MPNNLayer(MessagePassing):
         return h_node
 
 class DecoderLayer(MessagePassing):
+    # Implement decoder node?
     def __init__(self, hidden_dim=32,msg_dim=2, aggr='add',bias=True):
         # Set the aggregation function
         super().__init__(aggr=aggr)
@@ -92,7 +93,7 @@ class AlgoReasoning(Module):
         # encoded_message -> z
         encoded_msg = self.encoder(msg,h_msg)
         # hidden_node -> h
-        # TODO: why detach here
+        # TODO: need detach here?
         h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg.detach())
         # decoded_message -> y
         y_msg = self.decoder(h_msg)
@@ -100,7 +101,7 @@ class AlgoReasoning(Module):
 
 
 def train(model, train_loader, optimizer, device):
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
     model.train()
     loss_all = 0
     for data in train_loader:
@@ -110,25 +111,24 @@ def train(model, train_loader, optimizer, device):
         data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         optimizer.zero_grad()
         h_dim=32
-        edge_dim=2
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
-        y_msg = torch.zeros(data.edge_attr[0].size(dim=0), edge_dim)
+        # No prediction for iteration 0
+        # TODO: clone here
+        y_msg = data.edge_attr[0].clone()
         y_msg_pred = [y_msg]
         #use step_idx=0 to predict step_idx=1
         for step_idx in range(data.edge_attr.size(dim=0)-1):
-            # print(step_idx)
             h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
             y_msg_pred.append(y_msg)
 
         y_msg_pred = torch.stack(y_msg_pred)
-        # print(y_msg_pred.shape)
-        # print(data.edge_attr.shape)
         loss = F.mse_loss(y_msg_pred, data.edge_attr)
         loss.backward(retain_graph=True)
-        # print("loss item",loss.item())
-        loss_all += loss.item() * data.num_graphs
+        # TODO: not sure if needed - times number of graphs in a batch
+        # loss_all += loss.item() * data.num_graphs
+        loss_all += loss.item()
         optimizer.step()
-        # print("len(train_loader.dataset)", len(train_loader.dataset))
+    # divide total num of graphs in a dataset / all batches
     return loss_all / len(train_loader.dataset)
 
 
@@ -136,22 +136,19 @@ def train(model, train_loader, optimizer, device):
 def eval(model, loader, device):
     model.eval()
     error = 0
-
     for data in loader:
         data = prepare_batch(data)
         data = data.to(device)
         data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         h_dim=32
-        edge_dim=2
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
-        y_msg = torch.zeros(data.edge_attr[0].size(dim=0), edge_dim)
+        y_msg = data.edge_attr[0].clone()
         y_msg_pred = [y_msg]
         with torch.no_grad():
             for step_idx in range(data.edge_attr.size(dim=0)-1):
-                # print(step_idx)
                 h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
                 y_msg_pred.append(y_msg)
-            # Mean Absolute Error using std (computed when preparing data)
+            # Mean Absolute Error
             y_msg_pred = torch.stack(y_msg_pred)
             error += (y_msg_pred - data.edge_attr).abs().sum().item()
     return error / len(loader.dataset)
@@ -214,18 +211,11 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     return best_val_error, test_error, train_time, perf_per_epoch
 
 def prepare_batch(batch):
-    # print("before batch edge_attr shape: ", batch.edge_attr.shape)
-    # print("before batch y shape: ", batch.y.shape)
-    # batch = batch.to(_DEVICE)
-    # if len(batch.x.shape) == 2:
-    #     batch.x = batch.x.unsqueeze(-1)
     batch.edge_attr = batch.edge_attr.transpose(1, 0)
     batch.y = batch.y.transpose(1, 0)
-    # print("after batch edge_attr shape: ", batch.edge_attr.shape)
-    # print("after batch y shape: ", batch.y.shape)
     return batch
 
-if __name__ == "__main__":
+def prepare_datatset():
     mrf = string2factor_graph('f1(a,b)f2(b,c,d)f3(c)')
     f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
     f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
@@ -237,25 +227,27 @@ if __name__ == "__main__":
     lbp.belief('a', 10)
     msg, belief = lbp.get_msg_belief()
     data = create_data(mrf,msg, belief,2)
-
     dataset = [data]*100
-    print("Single datapoint shape: ", data)
-
-    print(f"Total number of samples: {len(dataset)}.")
-
-
     train_dataset = dataset[:30]
     val_dataset = dataset[30:50]
     test_dataset = dataset[50:100]
+    return train_dataset, val_dataset, test_dataset
 
+
+if __name__ == "__main__":
+    # Prepare data
+    train_dataset, val_dataset, test_dataset = prepare_datatset()
+    print("Single graph data shape: ", train_dataset[0])
+    print(f"Total number of training samples (graphs): {len(train_dataset)}.")
     print(
         f"Created dataset splits with {len(train_dataset)} training, {len(val_dataset)} validation, {len(test_dataset)} test samples.")
 
-    # Create dataloaders with batch size = 32
-    train_loader = DataLoader(train_dataset, batch_size=15, shuffle=True)
+    # Create dataloaders with batch size = 16
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
+    # Training
     model = AlgoReasoning()
     model_name = type(model).__name__
     best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
@@ -265,4 +257,4 @@ if __name__ == "__main__":
         val_loader, 
         test_loader,
         n_epochs=100
-)
+    )
