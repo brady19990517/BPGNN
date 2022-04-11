@@ -2,6 +2,7 @@ import igraph as ig
 import pyvis.network as net
 from factor import *
 import networkx as nx
+import random
 
 class factor_graph:
     def __init__(self):
@@ -149,21 +150,37 @@ def plot_factor_graph(x):
 
     return graph.show("graph.html")
 
-def gen_graph(n,m):
-    graph = nx.bipartite.random_graph(n,m,0.4)
-    var, fac = nx.bipartite.sets(graph)
+def gen_graph():
+    node_len = 10
+    # max_degree = 5
+    sequence = [random.randint(0,node_len+1) for i in range(node_len)]
+    tree = nx.from_prufer_sequence(sequence)
+    traverse_edge = list(nx.edge_bfs(tree))
+    print(traverse_edge)
+    depth = nx.single_source_shortest_path_length(tree,0)
+    d = {}
+    for key, value in depth.items():
+        d.setdefault(value, []).append(key)
+    print(d)
+    var= []
+    fac = []
+    for key in d.keys():
+        if key % 2 == 0:
+            var+=d[key]
+        else:
+            fac+=d[key]
+    print(var)
+    print(fac)
+
     factor_dict = {}
     for f in fac:
         var_set = set()
-        for e in graph.edges:
+        for e in tree.edges:
             if f == e[0]:
                 var_set.add(e[1])
             elif f == e[1]:
                 var_set.add(e[0])
         factor_dict[f] = list(var_set)
-    # print(factor_dict)
-    # print(var)
-    # print(factor)
     res_factor_graph = factor_graph()
     for k,v in factor_dict.items():
         v = [str(j) for j in v]

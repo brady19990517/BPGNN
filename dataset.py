@@ -14,6 +14,7 @@ import networkx as nx
 import os
 from tqdm import tqdm
 from pprint import pprint
+from torch_geometric.utils.convert import from_networkx
 
 # print(f"Torch version: {torch.__version__}")
 # print(f"Torch geometric version: {torch_geometric.__version__}")
@@ -109,3 +110,37 @@ def create_data(pgm, msgs, beliefs, num_classes=2):
 
 # graph = gen_graph(10,20)
 # # print(graph)
+
+
+if __name__ == "__main__":
+    # graph, variables, factors = gen_graph()
+    # print(graph)
+    # # data = from_networkx(graph,group_node_attrs,group_edge_attrs)
+    # # print(data)
+    # node_attrs = []
+    # for i in graph.nodes():
+    #     if i in variables:
+    #         node_attrs.append(0)
+    #     else:
+    #         node_attrs.append(random.randint(1, 2))
+    # group_node_attrs = F.one_hot(torch.tensor(node_attrs),3)
+    # print(group_node_attrs)
+
+
+
+    mrf = gen_graph()
+    for v in  mrf.get_graph().vs:
+        if v["is_factor"]:
+            print(v['name'])
+            print(mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name'])
+    # f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
+    # f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
+    # f3 = factor(['c'],           np.array([5, 1]))
+    # mrf.change_factor_distribution('f1', f1)
+    # mrf.change_factor_distribution('f2', f2)
+    # mrf.change_factor_distribution('f3', f3)
+    # lbp = loopy_belief_propagation(mrf)
+    # lbp.belief('a', 10)
+    # msg, belief = lbp.get_msg_belief()
+    # data_1 = create_data(mrf,msg, belief,2)
+
