@@ -76,7 +76,7 @@ class DecoderLayer(MessagePassing):
         self.lin = nn.Linear(hidden_dim, msg_dim, bias)
     
     def forward(self, h_msg):
-        return self.lin(h_msg)
+        return torch.softmax(self.lin(h_msg), dim=-1)
 
 class AlgoReasoning(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
@@ -87,21 +87,19 @@ class AlgoReasoning(Module):
         self.processor = MPNNLayer()
         self.decoder = DecoderLayer()
 
-    def forward(self, data, step_idx, h_msg):
+    def forward(self, data, h_msg, y_msg):
         h_node = self.lin_in(data.x)
-        msg = data.edge_attr[step_idx]
         # encoded_message -> z
-        encoded_msg = self.encoder(msg,h_msg)
+        encoded_msg = self.encoder(y_msg,h_msg)
         # hidden_node -> h
-        # TODO: need detach here?
-        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg.detach())
+        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
         # decoded_message -> y
         y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
 
 def train(model, train_loader, optimizer, device):
-    # torch.autograd.set_detect_anomaly(True)
+    torch.autograd.set_detect_anomaly(True)
     model.train()
     loss_all = 0
     for data in train_loader:
@@ -111,25 +109,26 @@ def train(model, train_loader, optimizer, device):
         data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         optimizer.zero_grad()
         h_dim=32
+        # All 0 for first h_msg
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
-        # No prediction for iteration 0
-        # TODO: clone here
-        y_msg = data.edge_attr[0].clone()
-        y_msg_pred = [y_msg]
-        #use step_idx=0 to predict step_idx=1
-        for step_idx in range(data.edge_attr.size(dim=0)-1):
-            h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
+
+        y_msg_pred = []
+        y_msg = data.edge_attr[0]
+        #Start from step_index 1, there's no prediction for step_index 0
+        for step_idx in range(1,data.edge_attr.size(dim=0)):
+            h_msg, y_msg = model(data, h_msg=h_msg, y_msg=y_msg)
             y_msg_pred.append(y_msg)
+            y_msg = data.edge_attr[step_idx]
 
         y_msg_pred = torch.stack(y_msg_pred)
-        loss = F.mse_loss(y_msg_pred, data.edge_attr)
-        loss.backward(retain_graph=True)
-        # TODO: not sure if needed - times number of graphs in a batch
-        # loss_all += loss.item() * data.num_graphs
-        loss_all += loss.item()
+        # print("y_msg_pred: ", y_msg_pred[-1,-1])
+        # print("data.edge_attr: ", data.edge_attr[-1,-1])
+        loss = F.mse_loss(y_msg_pred, data.edge_attr[1:])
+        loss.backward(retain_graph=False)
+        loss_all += loss.item() * data.num_graphs # number of graphs per batch
         optimizer.step()
-    # divide total num of graphs in a dataset / all batches
-    return loss_all / len(train_loader.dataset)
+
+    return loss_all / len(train_loader.dataset) # number of total graphs
 
 
 
@@ -142,15 +141,23 @@ def eval(model, loader, device):
         data.x, data.edge_attr = data.x.float(), data.edge_attr.float()
         h_dim=32
         h_msg = torch.zeros(data.edge_attr[0].size(dim=0), h_dim)
-        y_msg = data.edge_attr[0].clone()
-        y_msg_pred = [y_msg]
+
+        y_msg = data.edge_attr[0]
+        y_msg_pred = []
         with torch.no_grad():
-            for step_idx in range(data.edge_attr.size(dim=0)-1):
-                h_msg, y_msg = model(data, step_idx, h_msg=h_msg)
+            for step_idx in range(1, data.edge_attr.size(dim=0)):
+                h_msg, y_msg = model(data, h_msg=h_msg, y_msg=y_msg)
                 y_msg_pred.append(y_msg)
             # Mean Absolute Error
             y_msg_pred = torch.stack(y_msg_pred)
-            error += (y_msg_pred - data.edge_attr).abs().sum().item()
+            # print("y_msg_pred: ", y_msg_pred[-1,0])
+            # print("data.edge_attr: ", data.edge_attr[-1,0])
+            # TODO: train MSE val MAE
+            # TODO: Make sure to normalise data message
+            error += (y_msg_pred - data.edge_attr[1:]).abs().sum().item()
+            # print("error: ", (y_msg_pred - data.edge_attr).abs().sum(0).sum(-1))
+            # print(data.edge_index[:,0])
+            # breakpoint()
     return error / len(loader.dataset)
 
 
@@ -227,10 +234,15 @@ def prepare_datatset():
     lbp.belief('a', 10)
     msg, belief = lbp.get_msg_belief()
     data = create_data(mrf,msg, belief,2)
-    dataset = [data]*100
-    train_dataset = dataset[:30]
-    val_dataset = dataset[30:50]
-    test_dataset = dataset[50:100]
+    print(data.edge_index)
+    dataset = [data]
+    # dataset = [data]*100
+    # train_dataset = dataset[:30]
+    # val_dataset = dataset[30:50]
+    # test_dataset = dataset[50:100]
+    train_dataset = dataset
+    val_dataset = dataset
+    test_dataset = dataset
     return train_dataset, val_dataset, test_dataset
 
 

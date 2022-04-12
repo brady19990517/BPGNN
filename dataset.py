@@ -25,6 +25,7 @@ from torch_geometric.utils.convert import from_networkx
 
 
 def create_data(pgm, msgs, beliefs, num_classes=2):
+    print("Messages: ", msgs)
     #Create Features
     feat = []
     for v in pgm.get_graph().vs:
@@ -132,7 +133,11 @@ if __name__ == "__main__":
     for v in  mrf.get_graph().vs:
         if v["is_factor"]:
             print(v['name'])
-            print(mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name'])
+            nei = mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name']
+            # add factor
+            f = factor(nei, np.array([[0.07,0.2],[0.2,0.53]]))
+            # negative factor
+
     # f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
     # f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
     # f3 = factor(['c'],           np.array([5, 1]))
