@@ -76,6 +76,7 @@ class DecoderLayer(MessagePassing):
         self.lin = nn.Linear(hidden_dim, msg_dim, bias)
     
     def forward(self, h_msg):
+        # Normalise message for prediction
         return torch.softmax(self.lin(h_msg), dim=-1)
 
 class AlgoReasoning(Module):
@@ -123,6 +124,8 @@ def train(model, train_loader, optimizer, device):
         y_msg_pred = torch.stack(y_msg_pred)
         # print("y_msg_pred: ", y_msg_pred[-1,-1])
         # print("data.edge_attr: ", data.edge_attr[-1,-1])
+        print("y_msg_pred: ", y_msg_pred[-1])
+        print("data.edge_attr: ", data.edge_attr[-1])
         loss = F.mse_loss(y_msg_pred, data.edge_attr[1:])
         loss.backward(retain_graph=False)
         loss_all += loss.item() * data.num_graphs # number of graphs per batch
@@ -150,11 +153,13 @@ def eval(model, loader, device):
                 y_msg_pred.append(y_msg)
             # Mean Absolute Error
             y_msg_pred = torch.stack(y_msg_pred)
-            # print("y_msg_pred: ", y_msg_pred[-1,0])
-            # print("data.edge_attr: ", data.edge_attr[-1,0])
-            # TODO: train MSE val MAE
-            # TODO: Make sure to normalise data message
-            error += (y_msg_pred - data.edge_attr[1:]).abs().sum().item()
+            # print("y_msg_pred: ", y_msg_pred[-1])
+            # print("data.edge_attr: ", data.edge_attr[-1])
+            
+            # TODO: (Done): train MSE val MAE
+            # TODO (Done): Make sure to normalise data message
+            error += F.mse_loss(y_msg_pred, data.edge_attr[1:])
+            # error += (y_msg_pred - data.edge_attr[1:]).abs().sum().item()
             # print("error: ", (y_msg_pred - data.edge_attr).abs().sum(0).sum(-1))
             # print(data.edge_index[:,0])
             # breakpoint()

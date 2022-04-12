@@ -86,9 +86,9 @@ class loopy_belief_propagation():
             start_name, end_name = self.__pgm.get_graph().vs[start_index]['name'], self.__pgm.get_graph().vs[end_index]['name']
             
             if self.__pgm.get_graph().vs[start_index]['is_factor']:
-                self.__msg[(start_name, end_name)] = factor([end_name],   np.array([1.]*self.__pgm.get_graph().vs[end_index]['rank']))
+                self.__msg[(start_name, end_name)] = self.__normalize_msg(factor([end_name],   np.array([1.]*self.__pgm.get_graph().vs[end_index]['rank'])))
             else:
-                self.__msg[(start_name, end_name)] = factor([start_name], np.array([1.]*self.__pgm.get_graph().vs[start_index]['rank']))
+                self.__msg[(start_name, end_name)] = self.__normalize_msg(factor([start_name], np.array([1.]*self.__pgm.get_graph().vs[start_index]['rank'])))
             self.__msg[(end_name, start_name)] = self.__msg[(start_name, end_name)]
             
             self.__msg_new[(start_name, end_name)] = 0
@@ -118,7 +118,7 @@ class loopy_belief_propagation():
                 incoming_messages.append(self.get_factor2variable_msg(f_name_neighbor, v_name))
         
         if not incoming_messages:
-            return factor([v_name], np.array([1]*self.__pgm.get_graph().vs.find(name=v_name)['rank']))
+            return self.__normalize_msg(factor([v_name], np.array([1]*self.__pgm.get_graph().vs.find(name=v_name)['rank'])))
         else:
             return self.__normalize_msg(joint_distribution(incoming_messages))
     

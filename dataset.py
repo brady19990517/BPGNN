@@ -25,8 +25,10 @@ from torch_geometric.utils.convert import from_networkx
 
 
 def create_data(pgm, msgs, beliefs, num_classes=2):
-    print("Messages: ", msgs)
     #Create Features
+    for i,m in enumerate(msgs):
+        print('Iteration: ',i)
+        print(m)
     feat = []
     for v in pgm.get_graph().vs:
         feat.append(1) if v["is_factor"] else feat.append(0)
@@ -112,6 +114,17 @@ def create_data(pgm, msgs, beliefs, num_classes=2):
 # graph = gen_graph(10,20)
 # # print(graph)
 
+def create_distribution(nei_size):
+    assert(nei_size >= 1)
+
+    base = np.array([0,1])
+    result = base
+    for i in range(nei_size-1):
+        temp = result + 1
+        result = np.array([result,temp])
+
+    return result
+        
 
 if __name__ == "__main__":
     # graph, variables, factors = gen_graph()
@@ -132,13 +145,24 @@ if __name__ == "__main__":
     mrf = gen_graph()
     for v in  mrf.get_graph().vs:
         if v["is_factor"]:
-            print(v['name'])
+            # print(v['name'])
             nei = mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name']
-            # add factor
-            f = factor(nei, np.array([[0.07,0.2],[0.2,0.53]]))
+            nei_size = len(nei)
+            distribution = create_distribution(nei_size)
+            f = factor(nei, distribution)
+            mrf.change_factor_distribution(v['name'], f)
             # negative factor
 
-    # f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
+    lbp = loopy_belief_propagation(mrf)
+    lbp.belief('0', 10)
+    msg, belief = lbp.get_msg_belief()
+    data_1 = create_data(mrf,msg, belief,2)
+
+    print(data_1)
+    # f1 = factor(['a', 'b'],      np.array([[0, 1],[1, 2]]))
+    # f1 = factor(['a', 'b', 'c'],      np.array([[0, 1],[1, 2]]))
+    # print(factor_marginalization(f1,'a').get_variables())
+    # print(factor_marginalization(f1,'a').get_distribution())
     # f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
     # f3 = factor(['c'],           np.array([5, 1]))
     # mrf.change_factor_distribution('f1', f1)
@@ -149,3 +173,6 @@ if __name__ == "__main__":
     # msg, belief = lbp.get_msg_belief()
     # data_1 = create_data(mrf,msg, belief,2)
 
+
+# TODO: Check data if same as belief propagation
+# TODO: Check if graph is tree
