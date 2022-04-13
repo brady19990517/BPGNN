@@ -62,7 +62,10 @@ class belief_propagation():
     
     # ----------------------- Other -------------------------
     def __normalize_msg(self, message):
-        return factor(message.get_variables(), message.get_distribution()/np.sum(message.get_distribution()))
+        if np.sum(message.get_distribution()) == 0:
+            return self.__normalize_msg(factor(message.get_variables(), np.full(message.get_distribution().shape, 1)))
+        else:
+            return factor(message.get_variables(), message.get_distribution()/np.sum(message.get_distribution()))
 
 class loopy_belief_propagation():
     def __init__(self, pgm):
@@ -86,9 +89,9 @@ class loopy_belief_propagation():
             start_name, end_name = self.__pgm.get_graph().vs[start_index]['name'], self.__pgm.get_graph().vs[end_index]['name']
             
             if self.__pgm.get_graph().vs[start_index]['is_factor']:
-                self.__msg[(start_name, end_name)] = self.__normalize_msg(factor([end_name],   np.array([1.]*self.__pgm.get_graph().vs[end_index]['rank'])))
+                self.__msg[(start_name, end_name)] = factor([end_name],   np.array([1.]*self.__pgm.get_graph().vs[end_index]['rank']))
             else:
-                self.__msg[(start_name, end_name)] = self.__normalize_msg(factor([start_name], np.array([1.]*self.__pgm.get_graph().vs[start_index]['rank'])))
+                self.__msg[(start_name, end_name)] = factor([start_name], np.array([1.]*self.__pgm.get_graph().vs[start_index]['rank']))
             self.__msg[(end_name, start_name)] = self.__msg[(start_name, end_name)]
             
             self.__msg_new[(start_name, end_name)] = 0
@@ -118,7 +121,7 @@ class loopy_belief_propagation():
                 incoming_messages.append(self.get_factor2variable_msg(f_name_neighbor, v_name))
         
         if not incoming_messages:
-            return self.__normalize_msg(factor([v_name], np.array([1]*self.__pgm.get_graph().vs.find(name=v_name)['rank'])))
+            return factor([v_name], np.array([1]*self.__pgm.get_graph().vs.find(name=v_name)['rank']))
         else:
             return self.__normalize_msg(joint_distribution(incoming_messages))
     
@@ -147,7 +150,7 @@ class loopy_belief_propagation():
             # print(self.__t)
             temp = {}
             for k,v in self.__msg.items():
-                temp[k] = v.get_distribution()
+                temp[k] = self.__normalize_msg(v).get_distribution()
                 # print(k,v.get_distribution())
             self.ret_msg.append(temp)
 
@@ -180,7 +183,13 @@ class loopy_belief_propagation():
             
     
     def __normalize_msg(self, message):
-        return factor(message.get_variables(), message.get_distribution()/np.sum(message.get_distribution()))
+        # print("Normalising message")
+        # print("Original Distribution: ", message.get_distribution())
+        # print("Total Sum: ", np.sum(message.get_distribution()))
+        if np.sum(message.get_distribution()) == 0:
+            return self.__normalize_msg(factor(message.get_variables(), np.full(message.get_distribution().shape, 1)))
+        else:
+            return factor(message.get_variables(), message.get_distribution()/np.sum(message.get_distribution()))
 
     def get_msg_belief(self):
         return self.ret_msg, self.ret_belief

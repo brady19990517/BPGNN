@@ -1,3 +1,4 @@
+import dis
 from BP import *
 from factor_graph import *
 from factor import *
@@ -23,15 +24,56 @@ from torch_geometric.utils.convert import from_networkx
 # Sum
 # train size
 
+def create_dataset(num_data=100, min_node_len=10, max_node_len=20, iteration=20, factor_class=3):
+    dataset = []
+    for _ in tqdm(range(num_data)):
+        mrf = gen_graph(random.randint(min_node_len,max_node_len))
+        node_type = []
+        for v in  mrf.get_graph().vs:
+            if v["is_factor"]:
+                nei = mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name']
+                nei_size = len(nei)
+                factor_type = random.randint(0,1)
+                distribution = create_distribution(nei_size,factor_type)
+                f = factor(nei, distribution)
+                mrf.change_factor_distribution(v['name'], f)
+                node_type.append(factor_type+1)
+            else:
+                node_type.append(0)
+        lbp = loopy_belief_propagation(mrf)
+        bp = belief_propagation(mrf)
+        # print((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
+        assert((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
+        msg, belief = lbp.get_msg_belief()
+        data = create_data(mrf,msg,belief,np.array(node_type),factor_class)
+        dataset.append(data)
+        # train_dataset, val_dataset, test_dataset = np.array_split(np.array(dataset),3)
+        train_dataset, val_dataset, test_dataset = list(split(dataset, 3))
+    return train_dataset, val_dataset, test_dataset
 
-def create_data(pgm, msgs, beliefs, num_classes=2):
-    #Create Features
-    for i,m in enumerate(msgs):
-        print('Iteration: ',i)
-        print(m)
-    feat = []
-    for v in pgm.get_graph().vs:
-        feat.append(1) if v["is_factor"] else feat.append(0)
+def split(a, n):
+    k, m = divmod(len(a), n)
+    return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
+
+def create_distribution(nei_size,factor_type):
+    assert(nei_size >= 1)
+
+    base = np.array([0,1])
+    result = base
+    for i in range(nei_size-1):
+        temp = result + 1
+        # result = np.concatenate((result,temp),axis=-1)
+        result = np.array([result,temp])
+
+    if factor_type == 1: # negative factor type
+        result = nei_size - result
+    assert(result.shape == tuple(2 for _ in range(nei_size)))
+    return result
+
+
+
+
+def create_data(pgm, msgs, beliefs, node_type,factor_class):
     
     #Create edge index
     edge_index = []
@@ -61,7 +103,8 @@ def create_data(pgm, msgs, beliefs, num_classes=2):
     y = np.array(y)
 
     #Create Data Object
-    data = Data(F.one_hot(torch.tensor(feat),num_classes),
+
+    data = Data(F.one_hot(torch.tensor(node_type),factor_class),
                 edge_index=torch.tensor(np.transpose(edge_index)),
                 edge_attr=torch.tensor(edge_attr),
                 y=torch.tensor(y)) 
@@ -114,16 +157,7 @@ def create_data(pgm, msgs, beliefs, num_classes=2):
 # graph = gen_graph(10,20)
 # # print(graph)
 
-def create_distribution(nei_size):
-    assert(nei_size >= 1)
 
-    base = np.array([0,1])
-    result = base
-    for i in range(nei_size-1):
-        temp = result + 1
-        result = np.array([result,temp])
-
-    return result
         
 
 if __name__ == "__main__":
@@ -142,23 +176,32 @@ if __name__ == "__main__":
 
 
 
-    mrf = gen_graph()
-    for v in  mrf.get_graph().vs:
-        if v["is_factor"]:
-            # print(v['name'])
-            nei = mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name']
-            nei_size = len(nei)
-            distribution = create_distribution(nei_size)
-            f = factor(nei, distribution)
-            mrf.change_factor_distribution(v['name'], f)
-            # negative factor
+    # mrf = gen_graph(node_len=10)
+    # for v in  mrf.get_graph().vs:
+    #     if v["is_factor"]:
+    #         # print(v['name'])
+    #         nei = mrf.get_graph().vs[mrf.get_graph().neighbors(v['name'])]['name']
+    #         nei_size = len(nei)
+    #         distribution = create_distribution(nei_size,random.randint(0,1))
+    #         print(distribution)
+    #         print(distribution.shape)
+    #         f = factor(nei, distribution)
+    #         mrf.change_factor_distribution(v['name'], f)
+    #         # negative factor
 
-    lbp = loopy_belief_propagation(mrf)
-    lbp.belief('0', 10)
-    msg, belief = lbp.get_msg_belief()
-    data_1 = create_data(mrf,msg, belief,2)
+    # lbp = loopy_belief_propagation(mrf)
+    # print("lbp: ", lbp.belief('0', 10).get_distribution())
 
-    print(data_1)
+    # bp = belief_propagation(mrf)
+    # print("bp: ",bp.belief('0').get_distribution())
+
+    # msg, belief = lbp.get_msg_belief()
+    # data_1 = create_data(mrf,msg, belief,2)
+
+    # print(data_1)
+    # print("y: ", data_1.y)
+    # print("edge_attr: ", data_1.edge_attr)
+
     # f1 = factor(['a', 'b'],      np.array([[0, 1],[1, 2]]))
     # f1 = factor(['a', 'b', 'c'],      np.array([[0, 1],[1, 2]]))
     # print(factor_marginalization(f1,'a').get_variables())
@@ -176,3 +219,15 @@ if __name__ == "__main__":
 
 # TODO: Check data if same as belief propagation
 # TODO: Check if graph is tree
+
+    train_dataset, val_dataset, test_dataset = create_dataset()
+    print("train")
+    for d in train_dataset:
+        print(d)
+    print("val")
+    for d in val_dataset:
+        print(d)
+    print("test")
+    for d in test_dataset:
+        print(d)
+    # print(len(train_dataset))

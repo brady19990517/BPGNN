@@ -124,8 +124,8 @@ def train(model, train_loader, optimizer, device):
         y_msg_pred = torch.stack(y_msg_pred)
         # print("y_msg_pred: ", y_msg_pred[-1,-1])
         # print("data.edge_attr: ", data.edge_attr[-1,-1])
-        print("y_msg_pred: ", y_msg_pred[-1])
-        print("data.edge_attr: ", data.edge_attr[-1])
+        # print("y_msg_pred: ", y_msg_pred[-1])
+        # print("data.edge_attr: ", data.edge_attr[-1])
         loss = F.mse_loss(y_msg_pred, data.edge_attr[1:])
         loss.backward(retain_graph=False)
         loss_all += loss.item() * data.num_graphs # number of graphs per batch
@@ -218,7 +218,7 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     t = time.time() - t
     train_time = t/60
     print(
-        f"\nDone! Training took {train_time:.2f} mins. Best validation MAE: {best_val_error:.7f}, corresponding test MAE: {test_error:.7f}.")
+        f"\nDone! Training took {train_time:.2f} mins. Best validation MSE: {best_val_error:.7f}, corresponding test MSE: {test_error:.7f}.")
 
     return best_val_error, test_error, train_time, perf_per_epoch
 
@@ -253,7 +253,8 @@ def prepare_datatset():
 
 if __name__ == "__main__":
     # Prepare data
-    train_dataset, val_dataset, test_dataset = prepare_datatset()
+    # train_dataset, val_dataset, test_dataset = prepare_datatset()
+    train_dataset, val_dataset, test_dataset = create_dataset()
     print("Single graph data shape: ", train_dataset[0])
     print(f"Total number of training samples (graphs): {len(train_dataset)}.")
     print(
@@ -265,7 +266,7 @@ if __name__ == "__main__":
     test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
 
     # Training
-    model = AlgoReasoning()
+    model = AlgoReasoning(x_dim=3)
     model_name = type(model).__name__
     best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
         model, 
