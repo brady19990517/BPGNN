@@ -153,8 +153,8 @@ def eval(model, loader, device):
                 y_msg_pred.append(y_msg)
             # Mean Absolute Error
             y_msg_pred = torch.stack(y_msg_pred)
-            # print("y_msg_pred: ", y_msg_pred[-1])
-            # print("data.edge_attr: ", data.edge_attr[-1])
+            print("y_msg_pred: ", y_msg_pred[-1])
+            print("data.edge_attr: ", data.edge_attr[-1])
             
             # TODO: (Done): train MSE val MAE
             # TODO (Done): Make sure to normalise data message
