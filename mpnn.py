@@ -5,6 +5,7 @@ import os
 import random
 import time
 from pprint import pprint
+import seaborn as sns
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -30,6 +31,9 @@ from BP import *
 from factor import *
 from factor_graph import *
 from dataset import *
+
+RESULTS = {}
+DF_RESULTS = pd.DataFrame(columns=["Test MAE", "Val MAE", "Epoch", "Model"])
 
 class EncoderLayer(MessagePassing):
     def __init__(self, h_dim=32, msg_dim=2, aggr='add',bias=True):
@@ -59,7 +63,7 @@ class MPNNLayer(MessagePassing):
         h_node = self.propagate(edge_index, h_node=h_node, h_msg=h_msg, encoded_msg=encoded_msg)
         return h_node, self.h_msg_temp
 
-    def message(self, h_node_i, h_node_j, encoded_msg):
+    def message(self, h_node_i, h_node_j, encoded_msg, edge_index):
         aggr_msg = self.M(torch.cat([h_node_i, h_node_j, encoded_msg], dim=-1))
         self.h_msg_temp = aggr_msg
         return aggr_msg
@@ -67,6 +71,102 @@ class MPNNLayer(MessagePassing):
     def update(self, aggr_out, h_node):
         h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
         return h_node
+
+class MPNNLayer_2(MessagePassing):
+    def __init__(self, h_dim=32, aggr='add',bias=True):
+        # Set the aggregation function
+        super().__init__(aggr=aggr)
+
+        self.M = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU(),
+                               nn.Linear(h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU()
+                               )
+        self.N = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU(),
+                               nn.Linear(h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU()
+                               )
+        self.U = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU())
+        self.h_msg_temp = None
+
+    def forward(self, h_node, edge_index, h_msg, encoded_msg):
+        # Message aggregation at all destination node
+        # aggr_msgs = scatter(self.M(torch.cat([encoded_msg, h_msg], dim=-1)), edge_index[1].unsqueeze(-1), dim=self.node_dim, reduce='sum') # NxHIDDED
+        aggr_msgs = scatter(encoded_msg, edge_index[1].unsqueeze(-1), dim=self.node_dim, reduce='sum') # NxHIDDED
+        
+        # aggr_msgs_i = aggr_msgs[edge_index[0]]
+        # aggr_msg = self.N(torch.cat([aggr_msgs_i, encoded_msg], dim=-1))
+        # self.h_msg_temp = aggr_msg
+
+        h_node = self.propagate(edge_index, h_node=h_node, h_msg=h_msg, encoded_msg=encoded_msg, aggr_msgs=aggr_msgs)
+
+        return h_node, self.h_msg_temp
+
+    def message(self, h_node_i, h_node_j, encoded_msg, edge_index, aggr_msgs_j):
+        # print("First edge source node:", edge_index[0][0])
+        # print("aggr_msgs_j", aggr_msgs_j[0])
+        # print("aggr_msgs[edge_index[0]]", aggr_msgs[edge_index[0]][0])
+
+        aggr_msg = self.N(torch.cat([aggr_msgs_j, encoded_msg], dim=-1))
+        self.h_msg_temp = aggr_msg
+        return aggr_msg
+
+    def update(self, aggr_out, h_node):
+        h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
+        return h_node
+
+class MPNNLayer_3(MessagePassing):
+    def __init__(self, h_dim=32, aggr='add',bias=True):
+        # Set the aggregation function
+        super().__init__(aggr=aggr)
+
+        self.M = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU(),
+                               nn.Linear(h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU()
+                               )
+        self.N = nn.Sequential(nn.Linear(h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU(),
+                               nn.Linear(h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU()
+                               )
+        self.U = nn.Sequential(nn.Linear(2*h_dim, h_dim, bias=bias),
+                               nn.LeakyReLU())
+        self.h_msg_temp = None
+
+    def forward(self, h_node, edge_index, h_msg, encoded_msg):
+        # Message aggregation at all destination node
+        # aggr_msgs = scatter(self.M(torch.cat([encoded_msg, h_msg], dim=-1)), edge_index[1].unsqueeze(-1), dim=self.node_dim, reduce='sum') # NxHIDDED
+        # h_encoded = self.M(torch.cat([encoded_msg, h_msg], dim=-1))
+        aggr_msgs = scatter(encoded_msg, edge_index[1].unsqueeze(-1), dim=self.node_dim, reduce='sum') # NxHIDDED
+        
+        # aggr_msgs_i = aggr_msgs[edge_index[0]]
+        # aggr_msg = self.N(torch.cat([aggr_msgs_i, encoded_msg], dim=-1))
+        # self.h_msg_temp = aggr_msg
+
+        h_node = self.propagate(edge_index, h_node=h_node, h_msg=h_msg, encoded_msg=encoded_msg, aggr_msgs=aggr_msgs)
+
+        return h_node, self.h_msg_temp
+
+    def message(self, h_node_i, h_node_j, encoded_msg, edge_index, aggr_msgs_j,aggr_msgs):
+        # print("First edge source node:", edge_index[1][0])
+        # print("aggr_msgs_j", aggr_msgs_j)
+        # print("encoded_msg", encoded_msg)
+        # print("diff", aggr_msgs_j-encoded_msg)
+        # print("aggr_msgs[edge_index[0]]", aggr_msgs[5])
+        # print("edge_indx: ")
+        # print(edge_index)
+ 
+        aggr_msg = self.N(aggr_msgs_j - encoded_msg)
+        self.h_msg_temp = aggr_msg
+        return aggr_msg
+
+    def update(self, aggr_out, h_node):
+        h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
+        return h_node
+    
 
 class DecoderLayer(MessagePassing):
     # Implement decoder node?
@@ -98,8 +198,67 @@ class AlgoReasoning(Module):
         y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
+class AlgoReasoning_2(Module):
+    def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
+        super().__init__()
+        self.lin_in = Linear(x_dim, h_dim)
+        self.h_dim=h_dim
+        self.encoder = EncoderLayer()
+        self.processor_2 = MPNNLayer_2()
+        self.decoder = DecoderLayer()
 
-def train(model, train_loader, optimizer, device):
+    def forward(self, data, h_msg, y_msg):
+        h_node = self.lin_in(data.x)
+        # encoded_message -> z
+        encoded_msg = self.encoder(y_msg,h_msg)
+        # hidden_node -> h
+        h_node, h_msg = self.processor_2(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        # decoded_message -> y
+        y_msg = self.decoder(h_msg)
+        return h_msg, y_msg
+
+class AlgoReasoning_3(Module):
+    def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
+        super().__init__()
+        self.lin_in = Linear(x_dim, h_dim)
+        self.h_dim=h_dim
+        self.encoder = EncoderLayer()
+        self.processor_3 = MPNNLayer_3()
+        self.decoder = DecoderLayer()
+
+    def forward(self, data, h_msg, y_msg):
+        h_node = self.lin_in(data.x)
+        # encoded_message -> z
+        encoded_msg = self.encoder(y_msg,h_msg)
+        # hidden_node -> h
+        h_node, h_msg = self.processor_3(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        # decoded_message -> y
+        y_msg = self.decoder(h_msg)
+        return h_msg, y_msg
+
+class AlgoReasoning_2MPNN(Module):
+    def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
+        super().__init__()
+        self.lin_in = Linear(x_dim, h_dim)
+        self.h_dim=h_dim
+        self.encoder = EncoderLayer()
+        self.processor = MPNNLayer()
+        self.processor_2 = MPNNLayer()
+        self.decoder = DecoderLayer()
+
+    def forward(self, data, h_msg, y_msg):
+        h_node = self.lin_in(data.x)
+        # encoded_message -> z
+        encoded_msg = self.encoder(y_msg,h_msg)
+        # hidden_node -> h
+        h_node, h_msg = self.processor(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        h_node, h_msg = self.processor_2(h_node,data.edge_index,h_msg=h_msg,encoded_msg=encoded_msg)
+        # decoded_message -> y
+        y_msg = self.decoder(h_msg)
+        return h_msg, y_msg
+
+
+def train(model, train_loader, optimizer, device, epoch):
     torch.autograd.set_detect_anomaly(True)
     model.train()
     loss_all = 0
@@ -124,18 +283,23 @@ def train(model, train_loader, optimizer, device):
         y_msg_pred = torch.stack(y_msg_pred)
         # print("y_msg_pred: ", y_msg_pred[-1,-1])
         # print("data.edge_attr: ", data.edge_attr[-1,-1])
-        # print("y_msg_pred: ", y_msg_pred[-1])
-        # print("data.edge_attr: ", data.edge_attr[-1])
-        loss = F.mse_loss(y_msg_pred, data.edge_attr[1:])
+        # if epoch % 10 == 0:
+        #     print("[Last Iteration] y_msg_pred: ", (y_msg_pred[-1]*10**3).round() / (10**3)  )
+        #     print("[Last Iteration] data.edge_attr: ", data.edge_attr[-1])
+        loss = F.l1_loss(y_msg_pred, data.edge_attr[1:])
+
         loss.backward(retain_graph=False)
+        # print("train number of graphs per batch: ", data.num_graphs)
+        # print("train loss (one batch): ", loss.item())
         loss_all += loss.item() * data.num_graphs # number of graphs per batch
         optimizer.step()
 
+    # print('total graph: ', len(train_loader.dataset))
     return loss_all / len(train_loader.dataset) # number of total graphs
 
 
 
-def eval(model, loader, device):
+def eval(model, loader, device, epoch):
     model.eval()
     error = 0
     for data in loader:
@@ -153,16 +317,22 @@ def eval(model, loader, device):
                 y_msg_pred.append(y_msg)
             # Mean Absolute Error
             y_msg_pred = torch.stack(y_msg_pred)
-            print("y_msg_pred: ", y_msg_pred[-1])
-            print("data.edge_attr: ", data.edge_attr[-1])
+            # print("y_msg_pred: ", y_msg_pred[-1])
+            # print("data.edge_attr: ", data.edge_attr[-1])
             
             # TODO: (Done): train MSE val MAE
             # TODO (Done): Make sure to normalise data message
-            error += F.mse_loss(y_msg_pred, data.edge_attr[1:])
+            # error += F.mse_loss(y_msg_pred, data.edge_attr[1:])
+            # print("eval number of graphs per batch: ", data.num_graphs)
+            # print("eval loss (one batch): ", F.l1_loss(y_msg_pred, data.edge_attr[1:]))
+            # print("eval loss (one batch): ", )
             # error += (y_msg_pred - data.edge_attr[1:]).abs().sum().item()
-            # print("error: ", (y_msg_pred - data.edge_attr).abs().sum(0).sum(-1))
+            error += F.l1_loss(y_msg_pred, data.edge_attr[1:]).item() * data.num_graphs
+            if epoch == 2000:
+                print(F.kl_div(y_msg_pred, data.edge_attr[1:]))
             # print(data.edge_index[:,0])
             # breakpoint()
+    # print('total graph: ', len(loader.dataset))
     return error / len(loader.dataset)
 
 
@@ -193,18 +363,19 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     perf_per_epoch = []  # Track Test/Val MAE vs. epoch (for plotting)
     t = time.time()
     for epoch in range(1, n_epochs+1):
+        # print('epoch: ', epoch)
         # Call LR scheduler at start of each epoch
         lr = scheduler.optimizer.param_groups[0]['lr']
 
         # Train model for one epoch, return avg. training loss
-        loss = train(model, train_loader, optimizer, device)
+        loss = train(model, train_loader, optimizer, device, epoch)
 
         # Evaluate model on validation set
-        val_error = eval(model, val_loader, device)
+        val_error = eval(model, val_loader, device, epoch)
 
         if best_val_error is None or val_error <= best_val_error:
             # Evaluate model on test set if validation metric improves
-            test_error = eval(model, test_loader, device)
+            test_error = eval(model, test_loader, device, epoch)
             best_val_error = val_error
 
         if epoch % 10 == 0:
@@ -218,7 +389,7 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     t = time.time() - t
     train_time = t/60
     print(
-        f"\nDone! Training took {train_time:.2f} mins. Best validation MSE: {best_val_error:.7f}, corresponding test MSE: {test_error:.7f}.")
+        f"\nDone! Training took {train_time:.2f} mins. Best validation MAE: {best_val_error:.7f}, corresponding test MAE: {test_error:.7f}.")
 
     return best_val_error, test_error, train_time, perf_per_epoch
 
@@ -227,43 +398,50 @@ def prepare_batch(batch):
     batch.y = batch.y.transpose(1, 0)
     return batch
 
-def prepare_datatset():
-    mrf = string2factor_graph('f1(a,b)f2(b,c,d)f3(c)')
-    f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
-    f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
-    f3 = factor(['c'],           np.array([5, 1]))
-    mrf.change_factor_distribution('f1', f1)
-    mrf.change_factor_distribution('f2', f2)
-    mrf.change_factor_distribution('f3', f3)
-    lbp = loopy_belief_propagation(mrf)
-    lbp.belief('a', 10)
-    msg, belief = lbp.get_msg_belief()
-    data = create_data(mrf,msg, belief,2)
-    print(data.edge_index)
-    dataset = [data]
-    # dataset = [data]*100
-    # train_dataset = dataset[:30]
-    # val_dataset = dataset[30:50]
-    # test_dataset = dataset[50:100]
-    train_dataset = dataset
-    val_dataset = dataset
-    test_dataset = dataset
-    return train_dataset, val_dataset, test_dataset
+# def prepare_datatset():
+#     mrf = string2factor_graph('f1(a,b)f2(b,c,d)f3(c)')
+#     f1 = factor(['a', 'b'],      np.array([[2,3],[6,4]]))
+#     f2 = factor(['b', 'd', 'c'], np.array([[[7,2],[1,5]],[[8,3],[6,4]]]))
+#     f3 = factor(['c'],           np.array([5, 1]))
+#     mrf.change_factor_distribution('f1', f1)
+#     mrf.change_factor_distribution('f2', f2)
+#     mrf.change_factor_distribution('f3', f3)
+#     lbp = loopy_belief_propagation(mrf)
+#     lbp.belief('a', 10)
+#     msg, belief = lbp.get_msg_belief()
+#     data = create_data(mrf,msg, belief,2)
+#     print(data.edge_index)
+#     dataset = [data]
+#     # dataset = [data]*100
+#     # train_dataset = dataset[:30]
+#     # val_dataset = dataset[30:50]
+#     # test_dataset = dataset[50:100]
+#     train_dataset = dataset
+#     val_dataset = dataset
+#     test_dataset = dataset
+#     return train_dataset, val_dataset, test_dataset
 
+def split(a, n):
+        k, m = divmod(len(a), n)
+        return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
 
 if __name__ == "__main__":
     # Prepare data
-    # train_dataset, val_dataset, test_dataset = prepare_datatset()
-    train_dataset, val_dataset, test_dataset = create_dataset()
+    dataset = BPDataset(root='data/',num_data=3000)
+    # train_dataset, val_dataset, test_dataset = split(dataset, 3)
+
+    train_dataset =  val_dataset = test_dataset = [dataset[0]]
+
     print("Single graph data shape: ", train_dataset[0])
     print(f"Total number of training samples (graphs): {len(train_dataset)}.")
     print(
         f"Created dataset splits with {len(train_dataset)} training, {len(val_dataset)} validation, {len(test_dataset)} test samples.")
 
     # Create dataloaders with batch size = 16
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
 
     # Training
     model = AlgoReasoning(x_dim=3)
@@ -274,5 +452,76 @@ if __name__ == "__main__":
         train_loader,
         val_loader, 
         test_loader,
-        n_epochs=100
+        n_epochs=200
     )
+    
+    RESULTS[model_name] = (best_val_error, test_error, train_time)
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+
+    model = AlgoReasoning_2(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=200
+    )
+    
+    RESULTS[model_name] = (best_val_error, test_error, train_time)
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+    model = AlgoReasoning_3(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=200
+    )
+    
+    RESULTS[model_name] = (best_val_error, test_error, train_time)
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+    model = AlgoReasoning_2MPNN(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=200
+    )
+    
+    RESULTS[model_name] = (best_val_error, test_error, train_time)
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+
+    p = sns.lineplot(x="Epoch", y="Test MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1));
+    plt.show()
+
+
+    # Save and load model
+    # path = 'model/model.pth'
+    # path = 'model/model_3000.pth'
+    # torch.save(model,path)
+    # model = torch.load(path)
+
+   
+
+    #TODO: Loss graph
+    #TODO: loopy graph
+
+
+    
+    
