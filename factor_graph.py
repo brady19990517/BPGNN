@@ -151,7 +151,7 @@ def plot_factor_graph(x):
 
     return graph.show("graph.html")
 
-def gen_graph(node_len=10):
+def gen_graph(node_len=10, loop=False):
     sequence = [random.randint(0,node_len-2+1) for i in range(node_len-2)]
     tree = nx.from_prufer_sequence(sequence)
     traverse_edge = list(nx.edge_bfs(tree))
@@ -166,6 +166,16 @@ def gen_graph(node_len=10):
         else:
             fac+=d[key]
 
+    # print("Before: ", nx.find_cycle(tree, orientation="original"))
+    if loop:
+        f = random.choice(fac)
+        f_depth = depth[f]
+        connect_f_depth = f_depth + 3 if f_depth + 3 in d else f_depth - 3
+        assert(connect_f_depth in d)
+        v = random.choice(d[connect_f_depth])
+        tree.add_edge(f,v)
+
+    # print("After: ", nx.find_cycle(tree, orientation="original"))
     res_factor_graph = factor_graph()
     for f in fac:
         res_factor_graph.add_factor_node(str(f), factor([str(n) for n in list(tree.neighbors(f))]))

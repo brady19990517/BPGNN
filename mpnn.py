@@ -33,7 +33,7 @@ from factor_graph import *
 from dataset import *
 
 RESULTS = {}
-DF_RESULTS = pd.DataFrame(columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+DF_RESULTS = pd.DataFrame(columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
 
 class EncoderLayer(MessagePassing):
     def __init__(self, h_dim=32, msg_dim=2, aggr='add',bias=True):
@@ -45,7 +45,7 @@ class EncoderLayer(MessagePassing):
         input = torch.cat((msg, h_msg), dim=1).float()
         return self.lin(input)
 
-class MPNNLayer(MessagePassing):
+class MPNN_Layer(MessagePassing):
     def __init__(self, h_dim=32, aggr='add',bias=True):
         # Set the aggregation function
         super().__init__(aggr=aggr)
@@ -72,7 +72,7 @@ class MPNNLayer(MessagePassing):
         h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
         return h_node
 
-class MPNNLayer_2(MessagePassing):
+class MPNN_SenderAggr_Layer(MessagePassing):
     def __init__(self, h_dim=32, aggr='add',bias=True):
         # Set the aggregation function
         super().__init__(aggr=aggr)
@@ -117,7 +117,7 @@ class MPNNLayer_2(MessagePassing):
         h_node = self.U(torch.cat((h_node, aggr_out), dim=1))
         return h_node
 
-class MPNNLayer_3(MessagePassing):
+class MPNN_Structure2Vec_Layer(MessagePassing):
     def __init__(self, h_dim=32, aggr='add',bias=True):
         # Set the aggregation function
         super().__init__(aggr=aggr)
@@ -154,11 +154,11 @@ class MPNNLayer_3(MessagePassing):
         # print("First edge source node:", edge_index[1][0])
         # print("aggr_msgs_j", aggr_msgs_j)
         # print("encoded_msg", encoded_msg)
-        # print("diff", aggr_msgs_j-encoded_msg)
+        print("diff", (aggr_msgs_j-encoded_msg).shape)
         # print("aggr_msgs[edge_index[0]]", aggr_msgs[5])
         # print("edge_indx: ")
         # print(edge_index)
- 
+
         aggr_msg = self.N(aggr_msgs_j - encoded_msg)
         self.h_msg_temp = aggr_msg
         return aggr_msg
@@ -179,13 +179,13 @@ class DecoderLayer(MessagePassing):
         # Normalise message for prediction
         return torch.softmax(self.lin(h_msg), dim=-1)
 
-class AlgoReasoning(Module):
+class MPNN(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
         super().__init__()
         self.lin_in = Linear(x_dim, h_dim)
         self.h_dim=h_dim
         self.encoder = EncoderLayer()
-        self.processor = MPNNLayer()
+        self.processor = MPNN_Layer()
         self.decoder = DecoderLayer()
 
     def forward(self, data, h_msg, y_msg):
@@ -198,13 +198,13 @@ class AlgoReasoning(Module):
         y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
-class AlgoReasoning_2(Module):
+class MPNN_SenderAggr(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
         super().__init__()
         self.lin_in = Linear(x_dim, h_dim)
         self.h_dim=h_dim
         self.encoder = EncoderLayer()
-        self.processor_2 = MPNNLayer_2()
+        self.processor_2 = MPNN_SenderAggr_Layer()
         self.decoder = DecoderLayer()
 
     def forward(self, data, h_msg, y_msg):
@@ -217,13 +217,13 @@ class AlgoReasoning_2(Module):
         y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
-class AlgoReasoning_3(Module):
+class MPNN_Structure2Vec(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
         super().__init__()
         self.lin_in = Linear(x_dim, h_dim)
         self.h_dim=h_dim
         self.encoder = EncoderLayer()
-        self.processor_3 = MPNNLayer_3()
+        self.processor_3 = MPNN_Structure2Vec_Layer()
         self.decoder = DecoderLayer()
 
     def forward(self, data, h_msg, y_msg):
@@ -236,14 +236,14 @@ class AlgoReasoning_3(Module):
         y_msg = self.decoder(h_msg)
         return h_msg, y_msg
 
-class AlgoReasoning_2MPNN(Module):
+class MPNN_2Layer(Module):
     def __init__(self, x_dim=2, h_dim=32, msg_dim=2):
         super().__init__()
         self.lin_in = Linear(x_dim, h_dim)
         self.h_dim=h_dim
         self.encoder = EncoderLayer()
-        self.processor = MPNNLayer()
-        self.processor_2 = MPNNLayer()
+        self.processor = MPNN_Layer()
+        self.processor_2 = MPNN_Layer()
         self.decoder = DecoderLayer()
 
     def forward(self, data, h_msg, y_msg):
@@ -384,7 +384,7 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
                   f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
 
         scheduler.step(val_error)
-        perf_per_epoch.append((test_error, val_error, epoch, model_name))
+        perf_per_epoch.append((loss, test_error, val_error, epoch, model_name))
 
     t = time.time() - t
     train_time = t/60
@@ -444,7 +444,38 @@ if __name__ == "__main__":
 
 
     # Training
-    model = AlgoReasoning(x_dim=3)
+    # model = MPNN(x_dim=3)
+    # model_name = type(model).__name__
+    # best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+    #     model, 
+    #     model_name, 
+    #     train_loader,
+    #     val_loader, 
+    #     test_loader,
+    #     n_epochs=200
+    # )
+    
+    # RESULTS[model_name] = (best_val_error, test_error, train_time)
+    # df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
+    # DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+
+    # model = MPNN_SenderAggr(x_dim=3)
+    # model_name = type(model).__name__
+    # best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
+    #     model, 
+    #     model_name, 
+    #     train_loader,
+    #     val_loader, 
+    #     test_loader,
+    #     n_epochs=200
+    # )
+    
+    # RESULTS[model_name] = (best_val_error, test_error, train_time)
+    # df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
+    # DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
+
+    model = MPNN_Structure2Vec(x_dim=3)
     model_name = type(model).__name__
     best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
         model, 
@@ -456,11 +487,10 @@ if __name__ == "__main__":
     )
     
     RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
     DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
 
-
-    model = AlgoReasoning_2(x_dim=3)
+    model = MPNN_2Layer(x_dim=3)
     model_name = type(model).__name__
     best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
         model, 
@@ -472,42 +502,12 @@ if __name__ == "__main__":
     )
     
     RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
     DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
 
-    model = AlgoReasoning_3(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-    
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-    model = AlgoReasoning_2MPNN(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-    
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-
-    p = sns.lineplot(x="Epoch", y="Test MAE", hue="Model", data=DF_RESULTS)
-    p.set(ylim=(0, 1));
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Train MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
     plt.show()
 
 

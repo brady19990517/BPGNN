@@ -29,8 +29,10 @@ class BPDataset(Dataset):
                  root,
                  transform=None,
                  pre_transform=None,
-                 num_data=100):
+                 num_data=100,
+                 loop=False):
         self.num_data = num_data
+        self.loop = loop
         super(BPDataset, self).__init__(root, transform, pre_transform)
 
 
@@ -40,14 +42,13 @@ class BPDataset(Dataset):
 
 
     def process(self):
-        data_list = self.create_dataset(num_data=self.num_data)
+        data_list = self.create_dataset(num_data=self.num_data,loop=self.loop)
         if self.pre_filter is not None:
             data_list = [data for data in data_list if self.pre_filter(data)]
 
         if self.pre_transform is not None:
             data_list = [self.pre_transform(data) for data in data_list]
-        print(data_list[0])
-        print(len(data_list))
+
         for i,data in enumerate(data_list):
             print(i)
             torch.save(data, 
@@ -62,10 +63,10 @@ class BPDataset(Dataset):
     def len(self):
         return self.num_data
 
-    def create_dataset(self,num_data=100, min_node_len=10, max_node_len=20, iteration=20, factor_class=3):
+    def create_dataset(self,num_data=100, min_node_len=10, max_node_len=20, iteration=20, factor_class=3,loop=False):
         dataset = []
         for _ in tqdm(range(num_data)):
-            mrf = gen_graph(random.randint(min_node_len,max_node_len))
+            mrf = gen_graph(random.randint(min_node_len,max_node_len),loop=loop)
             node_type = []
             for v in  mrf.get_graph().vs:
                 if v["is_factor"]:
@@ -79,17 +80,16 @@ class BPDataset(Dataset):
                 else:
                     node_type.append(0)
             lbp = loopy_belief_propagation(mrf)
-            bp = belief_propagation(mrf)
-            # print((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
-            assert((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
+            if loop is False:
+                bp = belief_propagation(mrf)
+                # print((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
+                assert((lbp.belief('0', iteration).get_distribution()==bp.belief('0').get_distribution()).all())
+            else:
+                lbp.belief('0', iteration)
             msg, belief = lbp.get_msg_belief()
             data = self.create_data(mrf,msg,belief,np.array(node_type),factor_class)
             dataset.append(data)
         return dataset
-
-    def split(self, a, n):
-        k, m = divmod(len(a), n)
-        return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
 
     def create_distribution(self, nei_size,factor_type):
         assert(nei_size >= 1)
@@ -146,7 +146,7 @@ class BPDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = BPDataset(root='data/',num_data=3000)
+    dataset = BPDataset(root='data/',num_data=1,loop=True)
     print(len(dataset))
     print(dataset[0])
     
