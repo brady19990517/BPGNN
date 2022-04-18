@@ -33,8 +33,7 @@ from factor import *
 from factor_graph import *
 from dataset import *
 
-RESULTS = {}
-DF_RESULTS = pd.DataFrame(columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
+
 
 class EncoderLayer(MessagePassing):
     def __init__(self, h_dim=32, msg_dim=2, aggr='add',bias=True):
@@ -169,14 +168,6 @@ class MPNN_Structure2Vec_Layer(MessagePassing):
         return h_node, self.h_msg_temp
 
     def message(self, h_node_i, h_node_j, encoded_msg, edge_index, aggr_msgs_j,aggr_msgs):
-        # print("First edge source node:", edge_index[1][0])
-        # print("aggr_msgs_j", aggr_msgs_j)
-        # print("encoded_msg", encoded_msg)
-        # print("diff", (aggr_msgs_j-encoded_msg).shape)
-        # print("aggr_msgs[edge_index[0]]", aggr_msgs[5])
-        # print("edge_indx: ")
-        # print(edge_index)
-
 
         aggr_msg = self.N_node(h_node_j) + self.N(aggr_msgs_j - encoded_msg)
         self.h_msg_temp = aggr_msg
@@ -207,16 +198,12 @@ class BeliefsDecoderLayer(MessagePassing):
     
     def forward(self, h_node, x_feat):
         # Normalise message for prediction
-        # print("h_node: ", h_node.shape)
-        # print("h_node: ", h_node)
-        variable_h_node = []
-        # print("features")
-        for i in range(len(x_feat)):
-            # print(x_feat[i][0])
-            if x_feat[i][0] == 1:
-                variable_h_node.append(h_node[i])
-        variable_h_node = torch.stack(variable_h_node)
-        # print("variable_h_node: ",variable_h_node)
+        mask = x_feat[:, 0] == 1
+        variable_h_node = h_node[mask]
+        # for i in range(len(x_feat)):
+        #     if x_feat[i][0] == 1:
+        #         variable_h_node.append(h_node[i])
+        # variable_h_node = torch.stack(variable_h_node)
         return torch.softmax(self.lin(variable_h_node), dim=-1)
     
 class MPNN(Module):
@@ -334,7 +321,11 @@ class MPNN_2Layer(Module):
 def train(model, train_loader, optimizer, device, epoch):
     torch.autograd.set_detect_anomaly(True)
     model.train()
+
     loss_all = 0
+    msg_loss_all = 0
+    belief_loss_all = 0
+
     for data in train_loader:
         # Transpose batch
         data = prepare_batch(data)
@@ -351,38 +342,35 @@ def train(model, train_loader, optimizer, device, epoch):
         #Start from step_index 1, there's no prediction for step_index 0
         for step_idx in range(1,data.edge_attr.size(dim=0)):
             h_msg, y_msg, y_beliefs = model(data, h_msg=h_msg, y_msg=y_msg)
-            # h_msg, y_msg = model(data, h_msg=h_msg, y_msg=y_msg)
             y_msg_pred.append(y_msg)
             y_beliefs_pred.append(y_beliefs)
             y_msg = data.edge_attr[step_idx]
 
         y_msg_pred = torch.stack(y_msg_pred)
         y_beliefs_pred = torch.stack(y_beliefs_pred)
-        # print("y_msg_pred: ", y_msg_pred[-1,-1])
-        # print("data.edge_attr: ", data.edge_attr[-1,-1])
-        # if epoch % 10 == 0:
-        #     print("[Last Iteration] y_msg_pred: ", (y_msg_pred[-1]*10**3).round() / (10**3)  )
-        #     print("[Last Iteration] data.edge_attr: ", data.edge_attr[-1])
-        loss = F.l1_loss(y_msg_pred, data.edge_attr[1:])
-        # print("y_beliefs_pred: ", y_beliefs_pred[-1])
-        # print("data.y", data.y[-1])
-        # print("loss: ", F.l1_loss(y_beliefs_pred, data.y[1:]))
-        loss += F.l1_loss(y_beliefs_pred, data.y[1:])
-
+    
+        loss_message = F.l1_loss(y_msg_pred, data.edge_attr[1:])
+        loss_belief = F.l1_loss(y_beliefs_pred, data.y[1:])
+        # loss = loss_message + loss_belief
+        loss = loss_message
         loss.backward(retain_graph=False)
-        # print("train number of graphs per batch: ", data.num_graphs)
-        # print("train loss (one batch): ", loss.item())
-        loss_all += loss.item() * data.num_graphs # number of graphs per batch
-        optimizer.step()
 
-    # print('total graph: ', len(train_loader.dataset))
-    return loss_all / len(train_loader.dataset) # number of total graphs
+        loss_all += loss.item() * data.num_graphs # number of graphs per batch
+        msg_loss_all += loss_message.item() * data.num_graphs
+        belief_loss_all += loss_belief.item() * data.num_graphs
+
+        optimizer.step()
+    return loss_all / len(train_loader.dataset), msg_loss_all / len(train_loader.dataset), belief_loss_all / len(train_loader.dataset)
+    # number of total graphs
 
 
 
 def eval(model, loader, device, epoch):
     model.eval()
     error = 0
+    msg_loss_all = 0
+    belief_loss_all = 0
+
     for data in loader:
         data = prepare_batch(data)
         data = data.to(device)
@@ -399,30 +387,23 @@ def eval(model, loader, device, epoch):
                 # h_msg, y_msg = model(data, h_msg=h_msg, y_msg=y_msg)
                 y_msg_pred.append(y_msg)
                 y_beliefs_pred.append(y_beliefs)
-            # Mean Absolute Error
+    
             y_msg_pred = torch.stack(y_msg_pred)
             y_beliefs_pred = torch.stack(y_beliefs_pred)
-            # print("y_msg_pred: ", y_msg_pred[-1])
-            # print("data.edge_attr: ", data.edge_attr[-1])
-            
-            # TODO: (Done): train MSE val MAE
-            # TODO (Done): Make sure to normalise data message
-            # error += F.mse_loss(y_msg_pred, data.edge_attr[1:])
-            # print("eval number of graphs per batch: ", data.num_graphs)
-            # print("eval loss (one batch): ", F.l1_loss(y_msg_pred, data.edge_attr[1:]))
-            # print("eval loss (one batch): ", )
-            # error += (y_msg_pred - data.edge_attr[1:]).abs().sum().item()
-            error += F.l1_loss(y_msg_pred, data.edge_attr[1:]).item() * data.num_graphs
-            error += F.l1_loss(y_beliefs_pred, data.y[1:]).item() * data.num_graphs
-            # if epoch == 2000:
-            #     print(F.kl_div(y_msg_pred, data.edge_attr[1:]))
-            # print(data.edge_index[:,0])
-            # breakpoint()
-    # print('total graph: ', len(loader.dataset))
-    return error / len(loader.dataset)
+         
+            loss_msg = F.l1_loss(y_msg_pred, data.edge_attr[1:])
+            loss_belief = F.l1_loss(y_beliefs_pred, data.y[1:])
+
+            error += loss_msg.item() * data.num_graphs
+            msg_loss_all += loss_msg.item() * data.num_graphs
+
+            # error += loss_belief.item() * data.num_graphs
+            belief_loss_all += loss_belief.item() * data.num_graphs
+
+    return error / len(loader.dataset), msg_loss_all / len(loader.dataset), belief_loss_all / len(loader.dataset)
 
 
-def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_epochs=100):
+def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_epochs=100, patience=50):
 
     print(
         f"Running experiment for {model_name}, training on {len(train_loader.dataset)} samples for {n_epochs} epochs.")
@@ -447,42 +428,61 @@ def run_experiment(model, model_name, train_loader, val_loader, test_loader, n_e
     print("\nStart training:")
     best_val_error = None
     best_test_error = None
+    best_test_msg_error = None
+    best_test_belief_error = None
     perf_per_epoch = []  # Track Test/Val MAE vs. epoch (for plotting)
     t = time.time()
+    p_counter = 0
     for epoch in range(1, n_epochs+1):
         # print('epoch: ', epoch)
         # Call LR scheduler at start of each epoch
         lr = scheduler.optimizer.param_groups[0]['lr']
 
         # Train model for one epoch, return avg. training loss
-        loss = train(model, train_loader, optimizer, device, epoch)
+        train_loss, train_msg_loss, train_belief_loss = train(model, train_loader, optimizer, device, epoch)
 
         # Evaluate model on validation set
-        val_error = eval(model, val_loader, device, epoch)
+        val_error, val_msg_error, val_belief_error = eval(model, val_loader, device, epoch)
 
         
         # Evaluate model on test set if validation metric improves
-        test_error = eval(model, test_loader, device, epoch)
+        test_error, test_msg_error, test_belief_error = eval(model, test_loader, device, epoch)
 
         if best_val_error is None or val_error <= best_val_error:
             best_val_error = val_error
+            p_counter = 0
+
         if best_test_error is None or test_error <= best_test_error:
             best_test_error = test_error
+        
+        if best_test_msg_error is None or test_msg_error <= best_test_msg_error:
+            best_test_msg_error = test_msg_error
+
+        if best_test_belief_error is None or test_belief_error <= best_test_belief_error:
+            best_test_belief_error = test_belief_error
+
+        if val_error > best_val_error:
+            p_counter += 1
 
         if epoch % 10 == 0:
             # Print and track stats every 10 epochs
-            print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {loss:.7f}, '
-                  f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}')
+            print(f'Epoch: {epoch:03d}, LR: {lr:5f}, Loss: {train_loss:.7f}, '
+                  f'Val MAE: {val_error:.7f}, Test MAE: {test_error:.7f}, Test Msg MAE: {test_msg_error:.7f}, Test Belief MAE: {test_belief_error:.7f}')
 
         scheduler.step(val_error)
-        perf_per_epoch.append((loss, test_error, val_error, epoch, model_name))
+        perf_per_epoch.append((train_loss, train_msg_loss, train_belief_loss, test_error, test_msg_error, test_belief_error, 
+                                    val_error, val_msg_error, val_belief_error, epoch, model_name))
+
+        if p_counter >= patience:
+            print("Validation error not improving...Terminate training")
+            break
 
     t = time.time() - t
     train_time = t/60
     print(
-        f"\nDone! Training took {train_time:.2f} mins. Best validation MAE: {best_val_error:.7f}, Best test MAE: {best_test_error:.7f}.")
+        f"\nDone! Training took {train_time:.2f} mins. Best validation MAE: {best_val_error:.7f}, Best test MAE: {best_test_error:.7f}, Best test msg MAE {best_test_msg_error:.7f}, Best test belief MAE {best_test_belief_error:.7f}")
 
-    return best_val_error, best_test_error, train_time, perf_per_epoch
+    return best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch
 
 def prepare_batch(batch):
     batch.edge_attr = batch.edge_attr.transpose(1, 0)
@@ -493,175 +493,176 @@ def split(a, n):
         k, m = divmod(len(a), n)
         return (a[i*k+min(i, m):(i+1)*k+min(i+1, m)] for i in range(n))
 
-if __name__ == "__main__":
-    # Prepare data
-    dataset = BPDataset(root='data/',num_data=1, loop=False)
-    train_dataset, val_dataset, test_dataset = split(dataset, 3)
-
-    train_dataset =  val_dataset = test_dataset = [dataset[0]]
-
-    print("Single graph data shape: ", train_dataset[0])
-    print(f"Total number of training samples (graphs): {len(train_dataset)}.")
-    print(
-        f"Created dataset splits with {len(train_dataset)} training, {len(val_dataset)} validation, {len(test_dataset)} test samples.")
-
-    # Create dataloaders with batch size = 16
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-
-
-    # Training
-    #------------------------------ MPNN --------------------------------
-    model = MPNN(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-
-    # Save and load model
-    path = 'model/MPNN.pth'
-    torch.save(model,path)
-    model = torch.load(path)
-    
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-    
-
-    #------------------------------ MPNN_SenderAggr --------------------------------
-    model = MPNN_SenderAggr(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-
-    # Save and load model
-    path = 'model/MPNN_SenderAggr.pth'
-    torch.save(model,path)
-    model = torch.load(path)
-    
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-    
-    #------------------------------ MPNN_Structure2Vec --------------------------------
-    model = MPNN_Structure2Vec(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-    
-    # Save and load model
-    path = 'model/MPNN_Structure2Vec.pth'
-    torch.save(model,path)
-    model = torch.load(path)
-
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-    #------------------------------ MPNN_2Structure2VecLayer --------------------------------
-    # model = MPNN_2Structure2VecLayer(x_dim=3)
-    # model_name = type(model).__name__
-    # best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-    #     model, 
-    #     model_name, 
-    #     train_loader,
-    #     val_loader, 
-    #     test_loader,
-    #     n_epochs=200
-    # )
-
-    # # Save and load model
-    # path = 'model/MPNN_2Structure2VecLayer.pth'
-    # torch.save(model,path)
-    # model = torch.load(path)
-    
-    # RESULTS[model_name] = (best_val_error, test_error, train_time)
-    # df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
-    # DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-    #------------------------------ MPNN_2Layer --------------------------------
-    model = MPNN_2Layer(x_dim=3)
-    model_name = type(model).__name__
-    best_val_error, test_error, train_time, perf_per_epoch = run_experiment(
-        model, 
-        model_name, 
-        train_loader,
-        val_loader, 
-        test_loader,
-        n_epochs=200
-    )
-
-    # Save and load model
-    path = 'model/MPNN_2Layer.pth'
-    torch.save(model,path)
-    model = torch.load(path)
-    
-    RESULTS[model_name] = (best_val_error, test_error, train_time)
-    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Test MAE", "Val MAE", "Epoch", "Model"])
-    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
-
-    #------------------------------ Plot --------------------------------
-
+def plot(DF_RESULTS):
     sns.set()
     p = sns.lineplot(x="Epoch", y="Train MAE", hue="Model", data=DF_RESULTS)
     p.set(ylim=(0, 1))
     plt.show()
-    p.get_figure().savefig('trainMAE.png')
+    # p.get_figure().savefig('trainMAE.png')
+
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Train Msg MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('trainMsgMAE.png')
+
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Train Belief MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('trainBeliefMAE.png')
 
     sns.set()
     p = sns.lineplot(x="Epoch", y="Test MAE", hue="Model", data=DF_RESULTS)
     p.set(ylim=(0, 1))
     plt.show()
-    p.get_figure().savefig('testMAE.png')
+    # p.get_figure().savefig('testMAE.png')
+
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Test Msg MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('testMsgMAE.png')
+
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Test Belief MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('testBeliefMAE.png')
 
     sns.set()
     p = sns.lineplot(x="Epoch", y="Val MAE", hue="Model", data=DF_RESULTS)
     p.set(ylim=(0, 1))
     plt.show()
-    p.get_figure().savefig('valMAE.png')
+    # p.get_figure().savefig('valMAE.png')
 
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Val Msg MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('valMsgMAE.png')
+
+    sns.set()
+    p = sns.lineplot(x="Epoch", y="Val Belief MAE", hue="Model", data=DF_RESULTS)
+    p.set(ylim=(0, 1))
+    plt.show()
+    # p.get_figure().savefig('valBeliefMAE.png')
+
+def save_load_model(model,path):
+    torch.save(model,path)
+    model = torch.load(path)
+    return model
+
+def log(RESULTS, DF_RESULTS, best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch):
+    RESULTS[model_name] = (best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time)
+    df_temp = pd.DataFrame(perf_per_epoch, columns=["Train MAE", "Train Msg MAE", "Train Belief MAE", "Test MAE", "Test Msg MAE", 
+                                "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"])
+    DF_RESULTS = DF_RESULTS.append(df_temp, ignore_index=True)
     with open('log.txt', 'a') as f:
-        content = '----------- Train Data: ' + str(len(train_dataset)) + '----------------\n'
-        f.write(content)
-        # dfAsString = DF_RESULTS.to_string(header=True, index=False)
-        # f.write(dfAsString)
+        f.write('\n------------------------------------\n')
+        dfAsString = DF_RESULTS.to_string(header=True, index=False)
+        f.write(dfAsString+'\n')
         f.write(json.dumps(RESULTS))
-
-    
-    # with open('log.txt', 'a') as f:
-    #     dfAsString = DF_RESULTS.to_string(header=True, index=False)
-    #     f.write(dfAsString)
-
-    # Save and load model
-    # path = 'model/model.pth'
-    # path = 'model/model_3000.pth'
-    # torch.save(model,path)
-    # model = torch.load(path)
-
-   
-
-    #TODO: Loss graph
-    #TODO: loopy graph
+        f.write('\n------------------------------------\n')
+    return DF_RESULTS
 
 
-    
-    
+if __name__ == "__main__":
+    RESULTS = {}
+    DF_RESULTS = pd.DataFrame(columns=["Train MAE", "Train Msg MAE", "Train Belief MAE", "Test MAE", "Test Msg MAE", 
+                                "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"])
+    # ------------- Prepare data --------------------------------
+    dataset = BPDataset(root='data/',num_data=1000, loop=False)
+    train_dataset = dataset[0:800]
+    val_dataset = dataset[800:900]
+    test_dataset = dataset[900:1000]
+    print("Single graph data shape: ", train_dataset[0])
+    print(f"Total number of training samples (graphs): {len(train_dataset)}.")
+    print(
+        f"Created dataset splits with {len(train_dataset)} training, {len(val_dataset)} validation, {len(test_dataset)} test samples.")
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+
+    #------------------------------ MPNN --------------------------------
+    model = MPNN(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=2000
+    )
+
+    save_load_model(model,'model/MPNN.pth')
+    DF_RESULTS = log(RESULTS, DF_RESULTS, best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch)
+    # plot(DF_RESULTS)
+
+    #------------------------------ MPNN_SenderAggr --------------------------------
+    model = MPNN_SenderAggr(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=2000
+    )
+
+    save_load_model(model,'model/MPNN_SenderAggr.pth')
+    DF_RESULTS = log(RESULTS, DF_RESULTS, best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch)
+    # plot(DF_RESULTS)
+
+    # #------------------------------ MPNN_Structure2Vec --------------------------------
+    model = MPNN_Structure2Vec(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=2000,
+        patience=100
+    )
+
+    save_load_model(model,'model/MPNN_Structure2Vec.pth')
+    DF_RESULTS = log(RESULTS, DF_RESULTS, best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch)
+    plot(DF_RESULTS)
+
+    # #------------------------------ MPNN_2Layer --------------------------------
+    model = MPNN_2Layer(x_dim=3)
+    model_name = type(model).__name__
+    best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch = run_experiment(
+        model, 
+        model_name, 
+        train_loader,
+        val_loader, 
+        test_loader,
+        n_epochs=2000
+    )
+
+    save_load_model(model,'model/MPNN_2Layer.pth')
+    DF_RESULTS = log(RESULTS, DF_RESULTS, best_val_error, best_test_error, best_test_msg_error, best_test_belief_error, train_time, perf_per_epoch)
+    plot(DF_RESULTS)
+
+
+    # data = pd.read_csv('temp.txt', sep=" ", header=None)
+    # data.columns = ["Train MAE", "Train Msg MAE" , "Train Belief MAE", "Test MAE", "Test Msg MAE", "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"]
+    # df = data[data.Model != 'MPNN_Structure2Vec']
+
+    # print(df)
+
+
+    # data2 = pd.read_csv('temp2.txt', sep=" ", header=None)
+    # data2.columns = ["Train MAE", "Train Msg MAE" , "Train Belief MAE", "Test MAE", "Test Msg MAE", "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"]
+
+    # print(data2)
+    # result = pd.concat([df, data2], ignore_index=True, sort=False)
+
+    # print(result)
+    # plot(result)
