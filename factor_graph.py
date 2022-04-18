@@ -168,12 +168,14 @@ def gen_graph(node_len=10, loop=False):
 
     # print("Before: ", nx.find_cycle(tree, orientation="original"))
     if loop:
-        f = random.choice(fac)
-        f_depth = depth[f]
-        connect_f_depth = f_depth + 3 if f_depth + 3 in d else f_depth - 3
-        assert(connect_f_depth in d)
-        v = random.choice(d[connect_f_depth])
-        tree.add_edge(f,v)
+        # f = random.choice(fac)
+        # f_depth = depth[f]
+        # connect_f_depth = f_depth + 3 if f_depth + 3 in d else f_depth - 3
+        # assert(connect_f_depth in d)
+        # v = random.choice(d[connect_f_depth])
+        v = random.choice(d[0])
+        f = random.choice(d[3])
+        tree.add_edge(v,f)
 
     # print("After: ", nx.find_cycle(tree, orientation="original"))
     res_factor_graph = factor_graph()

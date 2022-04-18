@@ -38,7 +38,10 @@ class BPDataset(Dataset):
 
     @property
     def processed_file_names(self):
-        return [f'data_{i}.pt' for i in range(self.num_data)]
+        if self.loop:
+            return [f'data_{i}_loop.pt' for i in range(self.num_data)]
+        else:
+            return [f'data_{i}.pt' for i in range(self.num_data)]
 
 
     def process(self):
@@ -50,13 +53,21 @@ class BPDataset(Dataset):
             data_list = [self.pre_transform(data) for data in data_list]
 
         for i,data in enumerate(data_list):
-            print(i)
-            torch.save(data, 
+            if self.loop:
+                torch.save(data, 
+                    os.path.join(self.processed_dir, 
+                                 f'data_{i}_loop.pt'))
+            else:
+                torch.save(data, 
                     os.path.join(self.processed_dir, 
                                  f'data_{i}.pt'))
         
     def get(self, i):
-        data = torch.load(os.path.join(self.processed_dir, 
+        if self.loop:
+            data = torch.load(os.path.join(self.processed_dir, 
+                                f'data_{i}_loop.pt'))
+        else:
+            data = torch.load(os.path.join(self.processed_dir, 
                                 f'data_{i}.pt'))
         return data
 
@@ -66,7 +77,13 @@ class BPDataset(Dataset):
     def create_dataset(self,num_data=100, min_node_len=10, max_node_len=20, iteration=20, factor_class=3,loop=False):
         dataset = []
         for _ in tqdm(range(num_data)):
-            mrf = gen_graph(random.randint(min_node_len,max_node_len),loop=loop)
+            mrf = None
+            try:
+                mrf = gen_graph(random.randint(min_node_len,max_node_len),loop=loop)
+            except Exception as e:
+                print(e)
+                print("Exception occur skip current loop")
+                continue
             node_type = []
             for v in  mrf.get_graph().vs:
                 if v["is_factor"]:
@@ -146,7 +163,10 @@ class BPDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = BPDataset(root='data/',num_data=1,loop=True)
+    dataset = BPDataset(root='data/',num_data=1100,loop=True)
+    print(len(dataset))
+    print(dataset[0])
+    dataset = BPDataset(root='data/',num_data=3000,loop=False)
     print(len(dataset))
     print(dataset[0])
     
