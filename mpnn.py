@@ -351,8 +351,8 @@ def train(model, train_loader, optimizer, device, epoch):
     
         loss_message = F.l1_loss(y_msg_pred, data.edge_attr[1:])
         loss_belief = F.l1_loss(y_beliefs_pred, data.y[1:])
-        # loss = loss_message + loss_belief
-        loss = loss_message
+        loss = loss_message + loss_belief
+        # loss = loss_message
         loss.backward(retain_graph=False)
 
         loss_all += loss.item() * data.num_graphs # number of graphs per batch
@@ -397,7 +397,7 @@ def eval(model, loader, device, epoch):
             error += loss_msg.item() * data.num_graphs
             msg_loss_all += loss_msg.item() * data.num_graphs
 
-            # error += loss_belief.item() * data.num_graphs
+            error += loss_belief.item() * data.num_graphs
             belief_loss_all += loss_belief.item() * data.num_graphs
 
     return error / len(loader.dataset), msg_loss_all / len(loader.dataset), belief_loss_all / len(loader.dataset)
