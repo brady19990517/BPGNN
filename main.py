@@ -23,3 +23,27 @@
 
 # #Test on loopy graph
 # eval(model,....)
+
+
+
+
+
+
+
+
+    #plot script
+    # data = pd.read_csv('temp.txt', sep=" ", header=None)
+    # data.columns = ["Train MAE", "Train Msg MAE" , "Train Belief MAE", "Test MAE", "Test Msg MAE", "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"]
+    # df = data[data.Model != 'MPNN_Structure2Vec']
+
+    # print(df)
+
+
+    # data2 = pd.read_csv('temp2.txt', sep=" ", header=None)
+    # data2.columns = ["Train MAE", "Train Msg MAE" , "Train Belief MAE", "Test MAE", "Test Msg MAE", "Test Belief MAE", "Val MAE", "Val Msg MAE", "Val Belief MAE", "Epoch", "Model"]
+
+    # print(data2)
+    # result = pd.concat([df, data2], ignore_index=True, sort=False)
+
+    # print(result)
+    # plot(result)
